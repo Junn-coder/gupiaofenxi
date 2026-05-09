@@ -7,7 +7,8 @@ from email.mime.multipart import MIMEMultipart
 
 import pandas as pd
 import requests
-import akshare as ak
+import yfinance as yf
+import baostock as bs
 
 # 调试日志收集器
 debug_logs = []
@@ -26,58 +27,54 @@ WHITELIST = [
 
 def get_q1_growth(stock_code):
     """
+    使用 baostock 获取季度利润同比增长率
     返回 (revenue_growth, profit_growth, debug_info)
-    若获取失败或数据不足，返回 (None, None, debug_info)
     """
     debug_info = []
     try:
-        log_debug(f"  -> 调用 ak.stock_profit_sheet_by_report_em('{stock_code}')")
-        profit_df = ak.stock_profit_sheet_by_report_em(symbol=stock_code)
-        if profit_df is None or profit_df.empty:
-            debug_info.append("利润表为空")
-            log_debug(f"  ⚠️ {stock_code}: 利润表为空")
+        # 登录 baostock
+        lg = bs.login()
+        if lg.error_code != '0':
+            debug_info.append(f"baostock登录失败: {lg.error_msg}")
+            log_debug(f"  ❌ {stock_code}: baostock登录失败")
             return None, None, "\n".join(debug_info)
 
-        profit_df = profit_df.sort_values("报告期", ascending=False)
-        if len(profit_df) < 2:
-            debug_info.append("不足两个报告期")
-            log_debug(f"  ⚠️ {stock_code}: 不足两个报告期")
-            return None, None, "\n".join(debug_info)
-
-        # 优先查找 2026 年 Q1 数据
-        q1_current = profit_df[profit_df["报告期"].str.startswith("2026-03-31")]
-        if q1_current.empty:
-            debug_info.append("无2026Q1数据，使用最新报告期")
-            log_debug(f"  ℹ️ {stock_code}: 无2026Q1数据，使用最新报告期 {profit_df.iloc[0]['报告期']}")
-            q1_current = profit_df.head(1)
+        # 转换代码格式: 深市 sz, 沪市 sh
+        if stock_code.startswith('6'):
+            bs_code = f"sh.{stock_code}"
         else:
-            debug_info.append(f"使用2026Q1数据: {q1_current.iloc[0]['报告期']}")
+            bs_code = f"sz.{stock_code}"
 
-        # 查找去年同期的数据
-        prev_year = int(q1_current.iloc[0]["报告期"][:4]) - 1
-        q1_prev = profit_df[profit_df["报告期"].str.startswith(f"{prev_year}")]
-        if q1_prev.empty and len(profit_df) > 1:
-            debug_info.append(f"无{prev_year}同期数据，使用下一报告期 {profit_df.iloc[1]['报告期']}")
-            log_debug(f"  ℹ️ {stock_code}: 无{prev_year}同期数据，使用下一报告期 {profit_df.iloc[1]['报告期']}")
-            q1_prev = profit_df.iloc[[1]]
+        profit_list = []
+        for year in [2025, 2026]:
+            rs_profit = bs.query_profit_data(code=bs_code, year=year, quarter=1)
+            if rs_profit.error_code == '0':
+                while rs_profit.next():
+                    profit_list.append(rs_profit.get_row_data())
+            else:
+                debug_info.append(f"获取{year}Q1利润表失败: {rs_profit.error_msg}")
+        bs.logout()
 
-        if q1_current.empty or q1_prev.empty:
-            debug_info.append("无法找到足够的数据点")
-            log_debug(f"  ⚠️ {stock_code}: 无法找到足够的数据点")
+        if len(profit_list) < 2:
+            debug_info.append(f"不足两个季度的利润数据，实际获取到{len(profit_list)}条")
             return None, None, "\n".join(debug_info)
 
-        current_profit = q1_current.iloc[0]["净利润"]
-        prev_profit = q1_prev.iloc[0]["净利润"]
-        profit_growth = (current_profit - prev_profit) / abs(prev_profit) * 100 if prev_profit != 0 else None
+        profit_df = pd.DataFrame(profit_list, columns=['code', 'year', 'quarter', 'roe', 'net_profit', 'eps', 'revenue', 'profit_total', 'operate_profit'])
+        profit_df['net_profit'] = pd.to_numeric(profit_df['net_profit'])
+        profit_df['revenue'] = pd.to_numeric(profit_df['revenue'])
+        profit_df = profit_df.sort_values('year')
 
-        revenue_current = q1_current.iloc[0]["营业总收入"]
-        revenue_prev = q1_prev.iloc[0]["营业总收入"]
-        revenue_growth = (revenue_current - revenue_prev) / abs(revenue_prev) * 100 if revenue_prev != 0 else None
+        q2025 = profit_df[profit_df['year'] == '2025'].iloc[0]
+        q2026 = profit_df[profit_df['year'] == '2026'].iloc[0]
 
-        debug_info.append(f"营收增长: {revenue_growth:.2f}%, 净利增长: {profit_growth:.2f}%")
+        profit_growth = (q2026['net_profit'] - q2025['net_profit']) / abs(q2025['net_profit']) * 100 if q2025['net_profit'] != 0 else None
+        revenue_growth = (q2026['revenue'] - q2025['revenue']) / abs(q2025['revenue']) * 100 if q2025['revenue'] != 0 else None
+
+        debug_info.append(f"baostock: 2025Q1净利={q2025['net_profit']:.2f}, 2026Q1净利={q2026['net_profit']:.2f} -> 增长{profit_growth:.2f}%")
+        debug_info.append(f"营收增长{revenue_growth:.2f}%")
         return revenue_growth, profit_growth, "\n".join(debug_info)
     except Exception as e:
-        err_msg = f"异常: {str(e)}"
+        err_msg = f"baostock异常: {str(e)}"
         debug_info.append(err_msg)
         log_debug(f"  ❌ {stock_code}: {err_msg}")
         return None, None, "\n".join(debug_info)
@@ -145,14 +142,20 @@ def analyze_stock_with_myai(stock_info, api_key):
 
 def analyze_yyg(api_key):
     try:
-        real = ak.stock_zh_a_hist(symbol="601166", period="daily", adjust="qfq")
-        last = real.iloc[-1]
-        price = last["收盘"]
-        change = last["涨跌幅"]
+        ticker = yf.Ticker("601166.SS")
+        hist = ticker.history(period="2d")
+        if not hist.empty:
+            price = hist['Close'].iloc[-1]
+            if len(hist) > 1:
+                prev_close = hist['Close'].iloc[-2]
+                change = (price - prev_close) / prev_close * 100
+            else:
+                change = 0.0
+        else:
+            price, change = "N/A", "N/A"
     except Exception as e:
         log_debug(f"获取兴业银行行情失败: {e}")
-        price = "N/A"
-        change = "N/A"
+        price, change = "N/A", "N/A"
     prompt = f"""
 兴业银行（601166）最新数据：
 - 收盘价：{price}
@@ -215,7 +218,6 @@ def send_email(candidates, yyg_analysis, smtp_user, smtp_password, to_email):
     <pre>{yyg_analysis}</pre>
     """
 
-    # 调试信息部分
     debug_html = "<h2>🔧 调试日志</h2><details><summary>点击展开</summary><pre>" + "\n".join(debug_logs) + "</pre></details>"
 
     full_html = f"""
@@ -229,7 +231,7 @@ def send_email(candidates, yyg_analysis, smtp_user, smtp_password, to_email):
         <hr>
         {debug_html}
         <hr>
-        <p style="color: gray;">⚠️ 本报告由GitHub Actions自动生成，数据来源于AKShare，分析由AI提供，不构成投资建议。</p>
+        <p style="color: gray;">⚠️ 本报告由GitHub Actions自动生成，数据来源于baostock/yfinance，分析由AI提供，不构成投资建议。</p>
     </body>
     </html>
     """
