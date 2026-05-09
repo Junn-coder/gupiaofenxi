@@ -9,51 +9,63 @@ import pandas as pd
 import requests
 import akshare as ak
 
+# 调试日志收集器
+debug_logs = []
+
+def log_debug(msg):
+    print(msg)
+    debug_logs.append(msg)
+
 WHITELIST = [
-    {"code": "002916", "name": "深南电路", "sector": "PCB"},
-    {"code": "603986", "name": "兆易创新", "sector": "存储芯片"},
-    {"code": "688012", "name": "中微公司", "sector": "半导体设备"},
-    {"code": "688041", "name": "海光信息", "sector": "算力芯片"},
-    {"code": "300750", "name": "宁德时代", "sector": "电池"},
-    {"code": "300124", "name": "汇川技术", "sector": "工控"},
-    {"code": "603129", "name": "春风动力", "sector": "出海"},
-    {"code": "000733", "name": "振华科技", "sector": "军工电子"},
-    {"code": "002179", "name": "中航光电", "sector": "军工电子"},
-    {"code": "601899", "name": "紫金矿业", "sector": "铜金"},
-    {"code": "600111", "name": "北方稀土", "sector": "稀土"},
+    {"code": "603629", "name": "利通电子", "sector": "AI算力租赁"},
+    {"code": "688610", "name": "埃科光电", "sector": "机器视觉"},
+    {"code": "002266", "name": "浙富控股", "sector": "资源化/清洁能源"},
+    {"code": "301162", "name": "国能日新", "sector": "新能源数字化"},
+    {"code": "003010", "name": "若羽臣", "sector": "电商运营转型"},
 ]
 
 def get_q1_growth(stock_code):
+    """
+    返回 (revenue_growth, profit_growth, debug_info)
+    若获取失败或数据不足，返回 (None, None, debug_info)
+    """
+    debug_info = []
     try:
+        log_debug(f"  -> 调用 ak.stock_profit_sheet_by_report_em('{stock_code}')")
         profit_df = ak.stock_profit_sheet_by_report_em(symbol=stock_code)
         if profit_df is None or profit_df.empty:
-            print(f"  ⚠️ {stock_code}: 无利润表数据")
-            return None, None
+            debug_info.append("利润表为空")
+            log_debug(f"  ⚠️ {stock_code}: 利润表为空")
+            return None, None, "\n".join(debug_info)
 
         profit_df = profit_df.sort_values("报告期", ascending=False)
         if len(profit_df) < 2:
-            print(f"  ⚠️ {stock_code}: 不足两个报告期")
-            return None, None
+            debug_info.append("不足两个报告期")
+            log_debug(f"  ⚠️ {stock_code}: 不足两个报告期")
+            return None, None, "\n".join(debug_info)
 
         # 优先查找 2026 年 Q1 数据
         q1_current = profit_df[profit_df["报告期"].str.startswith("2026-03-31")]
-        # 如果没有 2026 年 Q1 数据，自动使用最新的报告期作为替代
         if q1_current.empty:
-            print(f"  ℹ️ {stock_code}: 无2026Q1数据，使用最新报告期 {profit_df.iloc[0]['报告期']}")
+            debug_info.append("无2026Q1数据，使用最新报告期")
+            log_debug(f"  ℹ️ {stock_code}: 无2026Q1数据，使用最新报告期 {profit_df.iloc[0]['报告期']}")
             q1_current = profit_df.head(1)
+        else:
+            debug_info.append(f"使用2026Q1数据: {q1_current.iloc[0]['报告期']}")
+
         # 查找去年同期的数据
         prev_year = int(q1_current.iloc[0]["报告期"][:4]) - 1
         q1_prev = profit_df[profit_df["报告期"].str.startswith(f"{prev_year}")]
-        # 如果没有去年同期数据，就使用下一个最新的报告期
         if q1_prev.empty and len(profit_df) > 1:
-            print(f"  ℹ️ {stock_code}: 无{prev_year}同期数据，使用下一报告期 {profit_df.iloc[1]['报告期']}")
+            debug_info.append(f"无{prev_year}同期数据，使用下一报告期 {profit_df.iloc[1]['报告期']}")
+            log_debug(f"  ℹ️ {stock_code}: 无{prev_year}同期数据，使用下一报告期 {profit_df.iloc[1]['报告期']}")
             q1_prev = profit_df.iloc[[1]]
-        if q1_current.empty or q1_prev.empty:
-            print(f"  ⚠️ {stock_code}: 无法找到足够的数据点")
-            return None, None
 
-        # 后续计算是否盈利等的代码... (保持不变)
-        # current_profit, prev_profit ... 等财务数据的提取
+        if q1_current.empty or q1_prev.empty:
+            debug_info.append("无法找到足够的数据点")
+            log_debug(f"  ⚠️ {stock_code}: 无法找到足够的数据点")
+            return None, None, "\n".join(debug_info)
+
         current_profit = q1_current.iloc[0]["净利润"]
         prev_profit = q1_prev.iloc[0]["净利润"]
         profit_growth = (current_profit - prev_profit) / abs(prev_profit) * 100 if prev_profit != 0 else None
@@ -62,22 +74,25 @@ def get_q1_growth(stock_code):
         revenue_prev = q1_prev.iloc[0]["营业总收入"]
         revenue_growth = (revenue_current - revenue_prev) / abs(revenue_prev) * 100 if revenue_prev != 0 else None
 
-        return revenue_growth, profit_growth
+        debug_info.append(f"营收增长: {revenue_growth:.2f}%, 净利增长: {profit_growth:.2f}%")
+        return revenue_growth, profit_growth, "\n".join(debug_info)
     except Exception as e:
-        print(f"❌ {stock_code}: 异常 - {e}")
-        return None, None
+        err_msg = f"异常: {str(e)}"
+        debug_info.append(err_msg)
+        log_debug(f"  ❌ {stock_code}: {err_msg}")
+        return None, None, "\n".join(debug_info)
 
 def screen_growth_stocks():
     candidates = []
     for item in WHITELIST:
         code = item["code"]
         name = item["name"]
-        print(f"正在分析 {name} ({code}) ...")
-        revenue_growth, profit_growth = get_q1_growth(code)
+        log_debug(f"正在分析 {name} ({code}) ...")
+        revenue_growth, profit_growth, debug_info = get_q1_growth(code)
         if revenue_growth is None or profit_growth is None:
-            print(f"  -> 数据缺失，跳过")
+            log_debug(f"  -> 数据缺失，跳过 (调试: {debug_info})")
             continue
-        print(f"  -> 营收增长 {revenue_growth:.2f}%，净利增长 {profit_growth:.2f}%")
+        log_debug(f"  -> 营收增长 {revenue_growth:.2f}%，净利增长 {profit_growth:.2f}%")
         if profit_growth > 30 and revenue_growth > 20:
             candidates.append({
                 "code": code,
@@ -85,7 +100,11 @@ def screen_growth_stocks():
                 "sector": item["sector"],
                 "revenue_growth": round(revenue_growth, 2),
                 "profit_growth": round(profit_growth, 2),
+                "debug": debug_info
             })
+            log_debug(f"  ✅ 符合条件，加入候选")
+        else:
+            log_debug(f"  ❌ 不符合条件 (净利>{profit_growth:.1f} 需>30 或 营收>{revenue_growth:.1f} 需>20)")
     return candidates
 
 def analyze_stock_with_myai(stock_info, api_key):
@@ -121,7 +140,7 @@ def analyze_stock_with_myai(stock_info, api_key):
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
     except Exception as e:
-        print(f"myai分析 {stock_info['name']} 失败: {e}")
+        log_debug(f"myai分析 {stock_info['name']} 失败: {e}")
         return "分析失败，请稍后重试。"
 
 def analyze_yyg(api_key):
@@ -130,7 +149,8 @@ def analyze_yyg(api_key):
         last = real.iloc[-1]
         price = last["收盘"]
         change = last["涨跌幅"]
-    except:
+    except Exception as e:
+        log_debug(f"获取兴业银行行情失败: {e}")
         price = "N/A"
         change = "N/A"
     prompt = f"""
@@ -158,7 +178,7 @@ def analyze_yyg(api_key):
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
     except Exception as e:
-        print(f"兴业银行分析失败: {e}")
+        log_debug(f"兴业银行分析失败: {e}")
         return "分析失败。"
 
 def send_email(candidates, yyg_analysis, smtp_user, smtp_password, to_email):
@@ -171,7 +191,7 @@ def send_email(candidates, yyg_analysis, smtp_user, smtp_password, to_email):
             <tr style="background-color: #f2f2f2;">
                 <th>股票代码</th><th>股票名称</th><th>赛道</th>
                 <th>营收同比(%)</th><th>净利同比(%)</th><th>AI综合评级</th><th>预期涨幅</th>
-            </table>
+            </tr>
         """
         for c in candidates:
             analysis_text = analyze_stock_with_myai(c, os.getenv("_API_KEY"))
@@ -188,12 +208,15 @@ def send_email(candidates, yyg_analysis, smtp_user, smtp_password, to_email):
             time.sleep(1)
         candidates_html += "</table>"
     else:
-        candidates_html += "<p>今日白名单中未筛选出符合条件（净利同比>100% 且 营收同比>30%）的高成长股。</p>"
+        candidates_html += "<p>今日白名单中未筛选出符合条件（净利同比>30% 且 营收同比>20%）的高成长股。</p>"
 
     yyg_html = f"""
     <h2>🏦 监控股票：兴业银行 (601166)</h2>
     <pre>{yyg_analysis}</pre>
     """
+
+    # 调试信息部分
+    debug_html = "<h2>🔧 调试日志</h2><details><summary>点击展开</summary><pre>" + "\n".join(debug_logs) + "</pre></details>"
 
     full_html = f"""
     <html>
@@ -203,6 +226,8 @@ def send_email(candidates, yyg_analysis, smtp_user, smtp_password, to_email):
         {candidates_html}
         <hr>
         {yyg_html}
+        <hr>
+        {debug_html}
         <hr>
         <p style="color: gray;">⚠️ 本报告由GitHub Actions自动生成，数据来源于AKShare，分析由AI提供，不构成投资建议。</p>
     </body>
@@ -231,9 +256,14 @@ def main():
     if not all([my_key, smtp_user, smtp_pwd, to_email]):
         raise ValueError("请确保GitHub Secrets中配置了_API_KEY, SMTP_USER, SMTP_PASSWORD, TO_EMAIL")
 
+    log_debug("========== 开始执行筛选 ==========")
     candidates = screen_growth_stocks()
+    log_debug(f"筛选完成，共找到 {len(candidates)} 只符合条件的股票")
+    log_debug("========== 开始分析兴业银行 ==========")
     yyg_analysis = analyze_yyg(my_key)
+    log_debug("========== 发送邮件 ==========")
     send_email(candidates, yyg_analysis, smtp_user, smtp_pwd, to_email)
+    log_debug("========== 全部完成 ==========")
 
 if __name__ == "__main__":
     main()
