@@ -1,4 +1,3 @@
-# daily_analysis.py
 import os
 import time
 import datetime
@@ -10,46 +9,28 @@ import pandas as pd
 import requests
 import akshare as ak
 
-# ------------------------------------------------------------
-# 1. 高成长赛道白名单（股票代码 + 名称）
-#    以下名单涵盖 AI/半导体、新能源、军工电子、涨价资源品
-# ------------------------------------------------------------
 WHITELIST = [
-    # AI算力与半导体
     {"code": "002916", "name": "深南电路", "sector": "PCB"},
     {"code": "603986", "name": "兆易创新", "sector": "存储芯片"},
     {"code": "688012", "name": "中微公司", "sector": "半导体设备"},
     {"code": "688041", "name": "海光信息", "sector": "算力芯片"},
-    # 新能源与高端制造
     {"code": "300750", "name": "宁德时代", "sector": "电池"},
     {"code": "300124", "name": "汇川技术", "sector": "工控"},
     {"code": "603129", "name": "春风动力", "sector": "出海"},
-    # 军工电子（振华科技、中航光电）
     {"code": "000733", "name": "振华科技", "sector": "军工电子"},
     {"code": "002179", "name": "中航光电", "sector": "军工电子"},
-    # 涨价资源品
     {"code": "601899", "name": "紫金矿业", "sector": "铜金"},
     {"code": "600111", "name": "北方稀土", "sector": "稀土"},
 ]
 
-# ------------------------------------------------------------
-# 2. 获取单只股票的一季度财务数据（营收同比增长、净利同比增长）
-# ------------------------------------------------------------
 def get_q1_growth(stock_code):
-    """
-    返回 (revenue_growth, profit_growth)
-    若获取失败或数据不足，返回 (None, None)
-    """
     try:
-        # 获取利润表（按报告期）
         profit_df = ak.stock_profit_sheet_by_report_em(symbol=stock_code)
         if profit_df is None or profit_df.empty:
             return None, None
-        # 提取最近两个报告期的净利润（用于同比）
         profit_df = profit_df.sort_values("报告期", ascending=False)
         if len(profit_df) < 2:
             return None, None
-        # 2026年一季报（报告期格式如 "2026-03-31"）
         q1_current = profit_df[profit_df["报告期"].str.startswith("2026-03-31")]
         q1_prev = profit_df[profit_df["报告期"].str.startswith("2025-03-31")]
         if q1_current.empty or q1_prev.empty:
@@ -57,20 +38,14 @@ def get_q1_growth(stock_code):
         current_profit = q1_current.iloc[0]["净利润"]
         prev_profit = q1_prev.iloc[0]["净利润"]
         profit_growth = (current_profit - prev_profit) / abs(prev_profit) * 100 if prev_profit != 0 else None
-
-        # 营收同比增长（使用营业总收入）
         revenue_current = q1_current.iloc[0]["营业总收入"]
         revenue_prev = q1_prev.iloc[0]["营业总收入"]
         revenue_growth = (revenue_current - revenue_prev) / abs(revenue_prev) * 100 if revenue_prev != 0 else None
-
         return revenue_growth, profit_growth
     except Exception as e:
         print(f"获取 {stock_code} 财务数据出错: {e}")
         return None, None
 
-# ------------------------------------------------------------
-# 3. 筛选高成长股（净利润同比>100%，营收同比>30%）
-# ------------------------------------------------------------
 def screen_growth_stocks():
     candidates = []
     for item in WHITELIST:
@@ -92,10 +67,7 @@ def screen_growth_stocks():
             })
     return candidates
 
-# ------------------------------------------------------------
-# 4. 调用 DeepSeek API 分析单只股票
-# ------------------------------------------------------------
-def analyze_stock_with_deepseek(stock_info, api_key):
+def analyze_stock_with_myai(stock_info, api_key):
     prompt = f"""
 请分析以下A股股票的投资价值，重点关注3-6个月是否有30%-50%上涨潜力：
 - 股票名称：{stock_info['name']}（{stock_info['code']}）
@@ -128,14 +100,10 @@ def analyze_stock_with_deepseek(stock_info, api_key):
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
     except Exception as e:
-        print(f"DeepSeek分析 {stock_info['name']} 失败: {e}")
+        print(f"myai分析 {stock_info['name']} 失败: {e}")
         return "分析失败，请稍后重试。"
 
-# ------------------------------------------------------------
-# 5. 分析兴业银行（保持不变）
-# ------------------------------------------------------------
 def analyze_yyg(api_key):
-    # 获取兴业银行最新行情
     try:
         real = ak.stock_zh_a_hist(symbol="601166", period="daily", adjust="qfq")
         last = real.iloc[-1]
@@ -172,13 +140,9 @@ def analyze_yyg(api_key):
         print(f"兴业银行分析失败: {e}")
         return "分析失败。"
 
-# ------------------------------------------------------------
-# 6. 发送HTML邮件（分两栏 + 表格）
-# ------------------------------------------------------------
 def send_email(candidates, yyg_analysis, smtp_user, smtp_password, to_email):
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # 构建高成长候选股票表格
     candidates_html = "<h2>📈 今日高成长股筛选结果（白名单）</h2>"
     if candidates:
         candidates_html += """
@@ -186,15 +150,12 @@ def send_email(candidates, yyg_analysis, smtp_user, smtp_password, to_email):
             <tr style="background-color: #f2f2f2;">
                 <th>股票代码</th><th>股票名称</th><th>赛道</th>
                 <th>营收同比(%)</th><th>净利同比(%)</th><th>AI综合评级</th><th>预期涨幅</th>
-            </tr>
+            </table>
         """
         for c in candidates:
-            # 调用DeepSeek获取详细分析（为避免API过载，这里只展示摘要，但你可以选择全量）
-            analysis_text = analyze_stock_with_deepseek(c, os.getenv("DEEPSEEK_API_KEY"))
-            # 简单提取评级和预期（实际可从analysis_text中正则提取，这里简化）
+            analysis_text = analyze_stock_with_myai(c, os.getenv("_API_KEY"))
             rating = "待分析"
             target_range = "待分析"
-            # 你可以将analysis_text完整放入表格，但会导致表格过长，故放在折叠区域
             candidates_html += f"""
                 <tr>
                     <td>{c['code']}</td><td>{c['name']}</td><td>{c['sector']}</td>
@@ -203,12 +164,11 @@ def send_email(candidates, yyg_analysis, smtp_user, smtp_password, to_email):
                 </tr>
                 <tr style="background-color: #fafafa;"><td colspan="7"><details><summary>📝 详细分析</summary><pre>{analysis_text}</pre></details></td></tr>
             """
-            time.sleep(1)  # 避免API请求过快
+            time.sleep(1)
         candidates_html += "</table>"
     else:
         candidates_html += "<p>今日白名单中未筛选出符合条件（净利同比>100% 且 营收同比>30%）的高成长股。</p>"
 
-    # 兴业银行分析部分
     yyg_html = f"""
     <h2>🏦 监控股票：兴业银行 (601166)</h2>
     <pre>{yyg_analysis}</pre>
@@ -223,12 +183,11 @@ def send_email(candidates, yyg_analysis, smtp_user, smtp_password, to_email):
         <hr>
         {yyg_html}
         <hr>
-        <p style="color: gray;">⚠️ 本报告由GitHub Actions自动生成，数据来源于AKShare，分析由DeepSeek API提供，不构成投资建议。</p>
+        <p style="color: gray;">⚠️ 本报告由GitHub Actions自动生成，数据来源于AKShare，分析由AI提供，不构成投资建议。</p>
     </body>
     </html>
     """
 
-    # 发送邮件
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"高成长股筛选 + 兴业银行分析 - {date_str}"
     msg["From"] = smtp_user
@@ -242,23 +201,17 @@ def send_email(candidates, yyg_analysis, smtp_user, smtp_password, to_email):
         server.sendmail(smtp_user, to_email, msg.as_string())
     print("邮件发送成功")
 
-# ------------------------------------------------------------
-# 7. 主函数
-# ------------------------------------------------------------
 def main():
-    deepseek_key = os.getenv("DEEPSEEK_API_KEY")
+    my_key = os.getenv("_API_KEY")
     smtp_user = os.getenv("SMTP_USER")
     smtp_pwd = os.getenv("SMTP_PASSWORD")
     to_email = os.getenv("TO_EMAIL")
 
-    if not all([deepseek_key, smtp_user, smtp_pwd, to_email]):
-        raise ValueError("请确保GitHub Secrets中配置了DEEPSEEK_API_KEY, SMTP_USER, SMTP_PASSWORD, TO_EMAIL")
+    if not all([my_key, smtp_user, smtp_pwd, to_email]):
+        raise ValueError("请确保GitHub Secrets中配置了_API_KEY, SMTP_USER, SMTP_PASSWORD, TO_EMAIL")
 
-    # 筛选高成长股
     candidates = screen_growth_stocks()
-    # 分析兴业银行
-    yyg_analysis = analyze_yyg(deepseek_key)
-    # 发送邮件
+    yyg_analysis = analyze_yyg(my_key)
     send_email(candidates, yyg_analysis, smtp_user, smtp_pwd, to_email)
 
 if __name__ == "__main__":
