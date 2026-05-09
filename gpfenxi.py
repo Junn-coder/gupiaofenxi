@@ -32,43 +32,52 @@ def get_q1_growth(stock_code):
     """
     debug_info = []
     try:
-        # 登录 baostock
         lg = bs.login()
         if lg.error_code != '0':
             debug_info.append(f"baostock登录失败: {lg.error_msg}")
             log_debug(f"  ❌ {stock_code}: baostock登录失败")
             return None, None, "\n".join(debug_info)
 
-        # 转换代码格式: 深市 sz, 沪市 sh
         if stock_code.startswith('6'):
             bs_code = f"sh.{stock_code}"
         else:
             bs_code = f"sz.{stock_code}"
 
-        profit_list = []
+        profit_data = []
         for year in [2025, 2026]:
             rs_profit = bs.query_profit_data(code=bs_code, year=year, quarter=1)
             if rs_profit.error_code == '0':
                 while rs_profit.next():
-                    profit_list.append(rs_profit.get_row_data())
+                    row = rs_profit.get_row_data()
+                    # 根据 baostock 文档，字段顺序为: code, year, quarter, roe, netProfit, eps, revenue, profitTotal, operateProfit, yoyNetProfit, yoyRevenue
+                    # 我们只需要 netProfit (索引4) 和 revenue (索引6)
+                    if len(row) >= 7:
+                        profit_data.append({
+                            'year': row[1],
+                            'net_profit': float(row[4]) if row[4] else 0.0,
+                            'revenue': float(row[6]) if row[6] else 0.0
+                        })
+                    else:
+                        debug_info.append(f"返回数据列数不足: {len(row)}")
             else:
                 debug_info.append(f"获取{year}Q1利润表失败: {rs_profit.error_msg}")
         bs.logout()
 
-        if len(profit_list) < 2:
-            debug_info.append(f"不足两个季度的利润数据，实际获取到{len(profit_list)}条")
+        if len(profit_data) < 2:
+            debug_info.append(f"不足两个季度的利润数据，实际获取到{len(profit_data)}条")
             return None, None, "\n".join(debug_info)
 
-        profit_df = pd.DataFrame(profit_list, columns=['code', 'year', 'quarter', 'roe', 'net_profit', 'eps', 'revenue', 'profit_total', 'operate_profit'])
-        profit_df['net_profit'] = pd.to_numeric(profit_df['net_profit'])
-        profit_df['revenue'] = pd.to_numeric(profit_df['revenue'])
-        profit_df = profit_df.sort_values('year')
+        df = pd.DataFrame(profit_data)
+        df = df.sort_values('year')
+        q2025 = df[df['year'] == '2025'].iloc[0]
+        q2026 = df[df['year'] == '2026'].iloc[0]
 
-        q2025 = profit_df[profit_df['year'] == '2025'].iloc[0]
-        q2026 = profit_df[profit_df['year'] == '2026'].iloc[0]
+        if q2025['net_profit'] == 0 or q2025['revenue'] == 0:
+            debug_info.append("同期净利或营收为0，无法计算增长率")
+            return None, None, "\n".join(debug_info)
 
-        profit_growth = (q2026['net_profit'] - q2025['net_profit']) / abs(q2025['net_profit']) * 100 if q2025['net_profit'] != 0 else None
-        revenue_growth = (q2026['revenue'] - q2025['revenue']) / abs(q2025['revenue']) * 100 if q2025['revenue'] != 0 else None
+        profit_growth = (q2026['net_profit'] - q2025['net_profit']) / abs(q2025['net_profit']) * 100
+        revenue_growth = (q2026['revenue'] - q2025['revenue']) / abs(q2025['revenue']) * 100
 
         debug_info.append(f"baostock: 2025Q1净利={q2025['net_profit']:.2f}, 2026Q1净利={q2026['net_profit']:.2f} -> 增长{profit_growth:.2f}%")
         debug_info.append(f"营收增长{revenue_growth:.2f}%")
