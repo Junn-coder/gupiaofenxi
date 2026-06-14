@@ -1,292 +1,260 @@
+#!/usr/bin/env python3
+"""
+gpfenxi.py — A-share daily pipeline (runs lifchang tools, emails watchlistd format).
+"""
+
 import os
 import sys
-import time
+import subprocess
 import datetime
-import argparse
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-import requests
-import yfinance as yf
-import baostock as bs
+LIFCHANG = "/tmp/lifchang"
+CTOOL = os.path.join(LIFCHANG, "c", "ctool")
+CHOLD = os.path.join(LIFCHANG, "c", "chold.md")
 
-debug_logs = []
 
-def log_debug(msg):
-    print(msg)
-    debug_logs.append(msg)
-
-WHITELIST = [
-    {"code": "603629", "name": "Litong Electronics", "sector": "AI Compute Rental"},
-    {"code": "688610", "name": "Eko Photonics",      "sector": "Machine Vision"},
-    {"code": "002266", "name": "Zhefu Holding",      "sector": "Resource Recycling / Clean Energy"},
-    {"code": "301162", "name": "Guoneng Rixin",      "sector": "New Energy Digitalization"},
-    {"code": "003010", "name": "Ruoyuchen",          "sector": "E-commerce Operations Transformation"},
-]
-
-def build_whitelist(codes_csv=None):
-    """If --codes 'code,name,sector;...' is given, override WHITELIST with scanned candidates."""
-    if not codes_csv:
-        return WHITELIST
-    out = []
-    for item in codes_csv.split(";"):
-        parts = item.strip().split(",")
-        if len(parts) >= 2:
-            out.append({"code": parts[0].strip(), "name": parts[1].strip(),
-                         "sector": parts[2].strip() if len(parts) > 2 else "unknown"})
-    return out if out else WHITELIST
-
-def get_q1_growth(stock_code):
-    """
-    Use baostock query_growth_data to fetch the latest Q1 YoY growth ratios.
-    growth_data field order: [code, pubDate, statDate, yoRevenue, yoNetProfit, ...]
-    yoRevenue / yoNetProfit are YoY growth ratios (e.g. 0.50 means +50%).
-    Returns (revenue_growth, profit_growth, debug_info) as percentages.
-    """
-    debug_info = []
+def run(cmd, cwd=CTOOL, timeout=120):
+    """Run a shell command, return (stdout, stderr, exit_code)."""
     try:
-        lg = bs.login()
-        if lg.error_code != '0':
-            debug_info.append(f"login failed: {lg.error_msg}")
-            log_debug(f"  [X] {stock_code}: login failed")
-            return None, None, "\n".join(debug_info)
+        r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True,
+                           text=True, timeout=timeout)
+        return r.stdout, r.stderr, r.returncode
+    except subprocess.TimeoutExpired:
+        return "", "timeout", 1
 
-        if stock_code.startswith('6'):
-            bs_code = f"sh.{stock_code}"
-        else:
-            bs_code = f"sz.{stock_code}"
 
-        current_year = datetime.datetime.now().year
-        rs = bs.query_growth_data(code=bs_code, year=current_year, quarter=1)
-        rows = []
-        if rs.error_code == '0':
-            while rs.next():
-                rows.append(rs.get_row_data())
-        else:
-            debug_info.append(f"query_growth_data error: {rs.error_msg}")
-        bs.logout()
+def run_gate():
+    """Step 1: index.py → gate verdict."""
+    out, err, rc = run("python index.py")
+    # parse verdict line
+    for line in out.split("\n"):
+        if "[Verdict]" in line:
+            return line.strip()
+    return "GATE_UNKNOWN"
 
-        if not rows:
-            debug_info.append(f"No growth data for {bs_code} ({current_year}Q1)")
-            return None, None, "\n".join(debug_info)
 
-        row = rows[0]
-        if len(row) < 5:
-            debug_info.append(f"Insufficient fields: got {len(row)}, need >=5")
-            return None, None, "\n".join(debug_info)
-
-        yo_revenue_str = row[3]
-        yo_net_profit_str = row[4]
-        revenue_growth = (float(yo_revenue_str) if yo_revenue_str else 0.0) * 100
-        profit_growth = (float(yo_net_profit_str) if yo_net_profit_str else 0.0) * 100
-
-        debug_info.append(
-            f"{bs_code} {row[2]} YoY revenue={revenue_growth:.2f}%, profit={profit_growth:.2f}%"
-        )
-        return revenue_growth, profit_growth, "\n".join(debug_info)
-    except Exception as e:
-        err_msg = f"baostock exception: {str(e)}"
-        debug_info.append(err_msg)
-        log_debug(f"  [X] {stock_code}: {err_msg}")
-        return None, None, "\n".join(debug_info)
-
-def screen_growth_stocks(whitelist=None):
-    if whitelist is None:
-        whitelist = WHITELIST
+def run_scan():
+    """Step 2: scan_cn.py --final 3 → list of {code, name, sector, cap, boards, flags}."""
+    out, err, rc = run("python scan_cn.py --final 3")
     candidates = []
-    for item in whitelist:
-        code = item["code"]
-        name = item["name"]
-        log_debug(f"Analyzing {name} ({code}) ...")
-        revenue_growth, profit_growth, debug_info = get_q1_growth(code)
-        if revenue_growth is None or profit_growth is None:
-            log_debug(f"  -> data missing, skipped (debug: {debug_info})")
+    in_table = False
+    for line in out.split("\n"):
+        if "code" in line and "name" in line and "bd" in line:
+            in_table = True
             continue
-        log_debug(f"  -> revenue growth {revenue_growth:.2f}%, profit growth {profit_growth:.2f}%")
-        if profit_growth > 30 and revenue_growth > 20:
-            candidates.append({
-                "code": code,
-                "name": name,
-                "sector": item["sector"],
-                "revenue_growth": round(revenue_growth, 2),
-                "profit_growth": round(profit_growth, 2),
-                "debug": debug_info
-            })
-            log_debug(f"  [OK] passes thresholds, added to candidates")
-        else:
-            log_debug(f"  [X] fails thresholds (profit {profit_growth:.1f}% needs >30, revenue {revenue_growth:.1f}% needs >20)")
+        if in_table and line.strip().startswith(("1  ", "2  ", "3  ")):
+            parts = line.split()
+            if len(parts) >= 7:
+                flags = " ".join(parts[7:]) if len(parts) > 7 else ""
+                candidates.append({
+                    "code": parts[1],
+                    "name": parts[2] if len(parts) > 2 else "?",
+                    "sector": parts[3] if len(parts) > 3 else "?",
+                    "boards": int(parts[4]) if parts[4].isdigit() else parts[4],
+                    "cap_str": parts[6] if len(parts) > 6 else "?",
+                    "flags": flags,
+                })
+        if in_table and not line.strip():
+            break
     return candidates
 
-def analyze_stock_with_myai(stock_info, api_key):
-    prompt = f"""
-请分析以下A股股票的投资价值，重点判断未来3-6个月是否具有30%-50%的上涨潜力：
-- 股票名称：{stock_info['name']}（{stock_info['code']}）
-- 所属板块：{stock_info['sector']}
-- 一季度净利润同比：{stock_info['profit_growth']}%
-- 一季度营业收入同比：{stock_info['revenue_growth']}%
 
-输出格式：
-1. 核心成长逻辑（2-3点）
-2. 主要风险（2点）
-3. 综合评级：A（强烈推荐）/ B（中性）/ C（回避）
-4. 预期3-6个月涨幅区间：xx%
-"""
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7,
-    }
-    try:
-        resp = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
-    except Exception as e:
-        log_debug(f"myai analysis failed for {stock_info['name']}: {e}")
-        return "Analysis failed, please retry later."
+def get_quote(code):
+    """Step 3: cn_stock.py <code> → latest price, open, high, low, prev_close."""
+    out, err, rc = run(f"python cn_stock.py {code}")
+    info = {"price": None, "open": None, "high": None, "low": None, "prev_close": None}
+    for line in out.split("\n"):
+        line = line.strip()
+        if "最新:" in line:
+            info["price"] = line.split()[1]
+        elif "开:" in line:
+            # "开:8.74 高:9.28 低:8.74 昨收:8.44"
+            for part in line.split():
+                if "开:" in part: info["open"] = part.split(":")[1]
+                if "高:" in part: info["high"] = part.split(":")[1]
+                if "低:" in part: info["low"] = part.split(":")[1]
+                if "昨收:" in part: info["prev_close"] = part.split(":")[1]
+    return info
 
-def analyze_yyg(api_key):
+
+def read_chold():
+    """Read existing holdings from chold.md."""
+    if not os.path.exists(CHOLD):
+        return []
+    with open(CHOLD, "r", encoding="utf-8") as f:
+        content = f.read()
+    holdings = []
+    for line in content.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) >= 3 and parts[0].isdigit() and len(parts[0]) == 6:
+            # active holding: "code qty cost"
+            if "sold" not in line.lower():
+                holdings.append({
+                    "code": parts[0],
+                    "qty": parts[1] if len(parts) > 1 else "?",
+                    "cost": parts[2] if len(parts) > 2 else "?",
+                })
+    return holdings
+
+
+def is_gap_seal(open_p, high_p, prev_close, board_limit=0.10):
+    """Check if T+1 open is already at/above the limit (unfillable)."""
     try:
-        ticker = yf.Ticker("601166.SS")
-        hist = ticker.history(period="2d")
-        if not hist.empty:
-            price = hist['Close'].iloc[-1]
-            if len(hist) > 1:
-                prev_close = hist['Close'].iloc[-2]
-                change = (price - prev_close) / prev_close * 100
-            else:
-                change = 0.0
+        o = float(open_p)
+        h = float(high_p)
+        p = float(prev_close)
+        return o >= p * (1 + board_limit - 0.01) and abs(o - h) < 0.01
+    except (ValueError, TypeError):
+        return False
+
+
+def cap_ok(cap_str):
+    """Check if float cap is in 30-500亿 range."""
+    try:
+        cap = float(cap_str)
+        return 30 <= cap <= 500
+    except (ValueError, TypeError):
+        return False
+
+
+def build_email(candidates, gate_verdict, holdings):
+    """Build HTML email in watchlistd format."""
+    date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # Gate row
+    gate_html = f"<p><strong>闸门：{gate_verdict}</strong></p>"
+
+    # Candidates table
+    table_rows = ""
+    buyable_html = ""
+    reject_html = ""
+    for i, c in enumerate(candidates):
+        cap_str = c.get("cap_str", "?")
+        bd = c.get("boards", "?")
+        flags_raw = c.get("flags", "")
+        cap_ok_flag = "✓" if cap_ok(cap_str) else "✗"
+        bd_flag = "⚠高位" if (isinstance(bd, int) and bd >= 5) else ""
+
+        q = get_quote(c["code"])
+        price = q.get("price", "?")
+        open_p = q.get("open", "?")
+        high_p = q.get("high", "?")
+        prev = q.get("prev_close", "?")
+
+        # Check unfillable
+        gs = is_gap_seal(open_p, high_p, prev)
+
+        skip_reason = ""
+        if gs:
+            skip_reason = "一字板无法买入"
+        elif not cap_ok(cap_str):
+            skip_reason = f"cap-NG ({cap_str}亿)"
+        elif isinstance(bd, int) and bd >= 5:
+            skip_reason = f"{bd}连板高位风险"
+
+        table_rows += f"""<tr>
+            <td>{i+1}</td><td>{c['code']}</td><td>{c['name']}</td><td>{c['sector']}</td>
+            <td>{cap_str}亿 {cap_ok_flag}</td><td>{bd}板</td>
+            <td>{skip_reason or flags_raw}</td>
+        </tr>"""
+
+        if skip_reason:
+            reject_html += f"<li>{c['code']} {c['name']} — {skip_reason}</li>"
         else:
-            price, change = "N/A", "N/A"
-    except Exception as e:
-        log_debug(f"Failed to fetch Industrial Bank quote: {e}")
-        price, change = "N/A", "N/A"
-    prompt = f"""
-兴业银行（601166）最新数据：
-- 收盘价：{price}
-- 当日涨跌幅：{change}%
-请结合当前低利率环境、银行板块整体估值以及公司不良贷款率，给出简要分析和操作建议。
-"""
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.7,
-    }
-    try:
-        resp = requests.post(
-            "https://api.deepseek.com/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
-    except Exception as e:
-        log_debug(f"Industrial Bank analysis failed: {e}")
-        return "Analysis failed."
+            try:
+                entry = float(price) if price != "?" else 0
+                shares = int(25000 / entry / 100) * 100 if entry > 0 else 0
+                amt = shares * entry
+                stop = round(entry * 0.95, 2)
+                tp1 = round(entry * 1.08, 2)
+                tp2 = round(entry * 1.15, 2)
+                buyable_html += f"""
+                <p><strong>✅ {c['code']} {c['name']} — {c['sector']}</strong></p>
+                <ul>
+                    <li>买入：T+1 开盘 ~¥{entry}，{shares} 股 ≈ ¥{amt:,.0f}</li>
+                    <li>止损：¥{stop}（ATR 1.0× max(5%, cap 10%)）</li>
+                    <li>止盈：TP1 ¥{tp1}（+8%）出一半，TP2 ¥{tp2}（+15%）清仓</li>
+                </ul>"""
+            except (ValueError, TypeError):
+                reject_html += f"<li>{c['code']} {c['name']} — 价格获取失败</li>"
 
-def send_email(candidates, yyg_analysis, smtp_user, smtp_password, to_email):
-    date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    candidates_html = "<h2>High-Growth Stock Screening Results (Whitelist)</h2>"
-    if candidates:
-        candidates_html += """
-        <table border="1" cellpadding="6" style="border-collapse: collapse; width: 100%; font-family: Arial;">
-            <tr style="background-color: #f2f2f2;">
-                <th>Code</th><th>Name</th><th>Sector</th>
-                <th>Revenue YoY (%)</th><th>Profit YoY (%)</th><th>AI Rating</th><th>Expected Upside</th>
-            </tr>
-        """
-        for c in candidates:
-            analysis_text = analyze_stock_with_myai(c, os.getenv("_API_KEY"))
-            rating = "pending"
-            target_range = "pending"
-            candidates_html += f"""
-                <tr>
-                    <td>{c['code']}</td><td>{c['name']}</td><td>{c['sector']}</td>
-                    <td>{c['revenue_growth']}</td><td>{c['profit_growth']}</td>
-                    <td>{rating}</td><td>{target_range}</td>
-                </tr>
-                <tr style="background-color: #fafafa;"><td colspan="7"><details><summary>Detailed analysis</summary><pre>{analysis_text}</pre></details></td></tr>
-            """
-            time.sleep(1)
-        candidates_html += "</table>"
+    # Holdings check
+    h_html = ""
+    if holdings:
+        h_html = "<h2>持仓检查</h2><ul>"
+        for h in holdings:
+            h_html += f"<li>{h['code']} — {h['qty']}股 @ ¥{h['cost']} — 需手动检查 framed.md §4</li>"
+        h_html += "</ul>"
     else:
-        candidates_html += "<p>No whitelisted stocks met the thresholds today (profit YoY > 30% AND revenue YoY > 20%).</p>"
+        h_html = "<p>无活跃持仓。</p>"
 
-    yyg_html = f"""
-    <h2>Watchlist: Industrial Bank (601166)</h2>
-    <pre>{yyg_analysis}</pre>
+    return f"""
+    <html><head><meta charset="UTF-8"></head><body>
+        <h1>每日 A 股扫描 — {date_str}</h1>
+        {gate_html}
+        <h2>候选股</h2>
+        <table border="1" cellpadding="6" style="border-collapse:collapse;font-family:Arial;">
+            <tr style="background:#f2f2f2;">
+                <th>#</th><th>code</th><th>name</th><th>sector</th><th>市值</th><th>连板</th><th>flag</th>
+            </tr>
+            {table_rows}
+        </table>
+        <h2>买入建议</h2>
+        {buyable_html or "<p>无可买入候选（全部 cap-NG / 一字板 / 高位风险）。</p>"}
+        <h2>排除</h2>
+        <ul>{reject_html}</ul>
+        <hr>
+        {h_html}
+        <hr>
+        <p style="color:gray;font-size:12px;">Auto-generated by GitHub Actions. Rules per framed.md. Not investment advice.</p>
+    </body></html>
     """
 
-    debug_html = "<h2>Debug Log</h2><details><summary>Click to expand</summary><pre>" + "\n".join(debug_logs) + "</pre></details>"
 
-    full_html = f"""
-    <html>
-    <head><meta charset="UTF-8"></head>
-    <body>
-        <h1>Daily Stock Market Brief - {date_str}</h1>
-        {candidates_html}
-        <hr>
-        {yyg_html}
-        <hr>
-        {debug_html}
-        <hr>
-        <p style="color: gray;">This report is auto-generated by GitHub Actions. Data from baostock/yfinance, analysis by AI. Not investment advice.</p>
-    </body>
-    </html>
-    """
-
+def send_email(html_body, smtp_user, smtp_password, to_email):
+    date_str = datetime.datetime.now().strftime("%Y-%m-%d")
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"High-Growth Screening + Industrial Bank Analysis - {date_str}"
+    msg["Subject"] = f"A 股每日扫描 — {date_str}"
     msg["From"] = smtp_user
     msg["To"] = to_email
-    part = MIMEText(full_html, "html")
-    msg.attach(part)
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP("smtp.gmail.com", 587) as server:
         server.starttls()
         server.login(smtp_user, smtp_password)
         server.sendmail(smtp_user, to_email, msg.as_string())
-    print("Email sent successfully")
+    print("Email sent.")
+
 
 def main():
-    ap = argparse.ArgumentParser(description="Growth stock screener")
-    ap.add_argument("--codes", default=None,
-                    help="Override whitelist: 'code,name,sector;...' (from scan_cn.py)")
-    args = ap.parse_args()
-
-    whitelist = build_whitelist(args.codes)
-
-    my_key = os.getenv("_API_KEY")
     smtp_user = os.getenv("SMTP_USER")
     smtp_pwd = os.getenv("SMTP_PASSWORD")
     to_email = os.getenv("TO_EMAIL")
+    if not all([smtp_user, smtp_pwd, to_email]):
+        raise ValueError("Missing SMTP_USER / SMTP_PASSWORD / TO_EMAIL")
 
-    if not all([my_key, smtp_user, smtp_pwd, to_email]):
-        raise ValueError("Please configure _API_KEY, SMTP_USER, SMTP_PASSWORD, TO_EMAIL in GitHub Secrets")
+    print("=== Step 1: Gate ===")
+    gate = run_gate()
+    print(f"  {gate}")
 
-    log_debug(f"========== Screening started ({len(whitelist)} stocks) ==========")
-    candidates = screen_growth_stocks(whitelist)
-    log_debug(f"Screening complete, {len(candidates)} stock(s) matched")
-    log_debug("========== Analyzing Industrial Bank ==========")
-    yyg_analysis = analyze_yyg(my_key)
-    log_debug("========== Sending email ==========")
-    send_email(candidates, yyg_analysis, smtp_user, smtp_pwd, to_email)
-    log_debug("========== Done ==========")
+    print("=== Step 2: Scan ===")
+    candidates = run_scan()
+    print(f"  {len(candidates)} candidates")
+
+    print("=== Step 3: Validate & Build ===")
+    holdings = read_chold()
+    html = build_email(candidates, gate, holdings)
+
+    print("=== Step 4: Send ===")
+    send_email(html, smtp_user, smtp_pwd, to_email)
+    print("Done.")
+
 
 if __name__ == "__main__":
     main()
