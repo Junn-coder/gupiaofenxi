@@ -37,29 +37,75 @@ def run_gate():
 
 
 def run_scan():
-    """Step 2: scan_cn.py --final 3 → list of {code, name, sector, cap, boards, flags}."""
-    out, err, rc = run("python scan_cn.py --final 3")
-    candidates = []
+    """Step 2: scan_cn.py → top-3 shortlist + backup candidates from sector leaders."""
+    out, err, rc = run("python scan_cn.py")   # full output, not --final 3
+    top3 = []
+    backups = []
     in_table = False
+    in_leader = False
     for line in out.split("\n"):
-        if "code" in line and "name" in line and "bd" in line:
+        # Final shortlist table
+        if "[Final shortlist" in line:
             in_table = True
+            in_leader = False
             continue
         if in_table and line.strip().startswith(("1  ", "2  ", "3  ")):
             parts = line.split()
-            if len(parts) >= 7:
-                flags = " ".join(parts[7:]) if len(parts) > 7 else ""
-                candidates.append({
-                    "code": parts[1],
-                    "name": parts[2] if len(parts) > 2 else "?",
-                    "sector": parts[3] if len(parts) > 3 else "?",
+            # col: # code name sector bd first brk turn% float(100M) flags...
+            if len(parts) >= 9:
+                flags = " ".join(parts[9:]) if len(parts) > 9 else ""
+                top3.append({
+                    "code": parts[1], "name": parts[2], "sector": parts[3],
                     "boards": int(parts[4]) if parts[4].isdigit() else parts[4],
-                    "cap_str": parts[6] if len(parts) > 6 else "?",
-                    "flags": flags,
+                    "first": parts[5], "brk": parts[6],
+                    "cap_str": parts[8], "flags": flags,
                 })
         if in_table and not line.strip():
-            break
-    return candidates
+            in_table = False
+
+        # Full leader breakdown per sector → pick cap-OK leaders not in top3
+        if "[Full leader breakdown" in line:
+            in_leader = True
+            in_table = False
+            continue
+        if in_leader and line.strip().startswith("* "):
+            in_leader = True
+            continue
+        if in_leader and "code" in line and "name" in line:
+            continue
+        if in_leader and line.strip().startswith(("2", "3", "4", "5", "6", "7", "8", "9")) and not line.strip().startswith("202"):
+            parts = line.split()
+            if len(parts) >= 7:
+                code = parts[0]
+                if code not in {c["code"] for c in top3} and code.isdigit() and len(code) == 6:
+                    backups.append({
+                        "code": code,
+                        "name": parts[1],
+                        "sector": "?",  # will be set below
+                        "boards": int(parts[2]) if parts[2].isdigit() else parts[2],
+                        "first": parts[3] if len(parts) > 3 else "?",
+                        "brk": parts[4] if len(parts) > 4 else "?",
+                        "turn": parts[5] if len(parts) > 5 else "?",
+                        "cap_str": parts[6] if len(parts) > 6 else "?",
+                        "flags": " ".join(parts[7:]) if len(parts) > 7 else "",
+                    })
+        if in_leader and not line.strip():
+            in_leader = False
+
+    # Tag backup sector from context
+    current_sector = ""
+    for line in out.split("\n"):
+        if line.strip().startswith("* "):
+            current_sector = line.strip()[2:]
+        elif current_sector:
+            for b in backups:
+                if b.get("sector") == "?":
+                    parts = line.split()
+                    if parts and parts[0] == b["code"]:
+                        b["sector"] = current_sector
+
+    print(f"  top3: {len(top3)}, backups: {len(backups)}")
+    return top3, backups
 
 
 def get_quote(code):
@@ -114,6 +160,28 @@ def is_gap_seal(open_p, high_p, prev_close, board_limit=0.10):
         return False
 
 
+def add_buyable(c, price):
+    """Return (added_bool, html_string) for a buyable candidate."""
+    try:
+        entry = float(price) if price and price != "?" else 0
+        if entry <= 0:
+            return False, ""
+        shares = int(25000 / entry / 100) * 100
+        amt = shares * entry
+        stop = round(entry * 0.95, 2)
+        tp1 = round(entry * 1.08, 2)
+        tp2 = round(entry * 1.15, 2)
+        html = f"""<p><strong>✅ {c['code']} {c['name']} — {c['sector']}</strong></p>
+        <ul>
+            <li>买入：T+1 开盘 ~¥{entry}，{shares} 股 ≈ ¥{amt:,.0f}</li>
+            <li>止损：¥{stop}（ATR 1.0× max(5%, cap 10%)）</li>
+            <li>止盈：TP1 ¥{tp1}（+8%）出一半，TP2 ¥{tp2}（+15%）清仓</li>
+        </ul>"""
+        return True, html
+    except (ValueError, TypeError):
+        return False, ""
+
+
 def cap_ok(cap_str):
     """Check if float cap is in 30-500亿 range."""
     try:
@@ -123,18 +191,21 @@ def cap_ok(cap_str):
         return False
 
 
-def build_email(candidates, gate_verdict, holdings):
-    """Build HTML email in watchlistd format."""
+def build_email(top3, backups, gate_verdict, holdings):
+    """Build HTML email in watchlistd format with top3 + backup coverage."""
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # Gate row
     gate_html = f"<p><strong>闸门：{gate_verdict}</strong></p>"
 
-    # Candidates table
+    # Candidates table (top3)
     table_rows = ""
     buyable_html = ""
     reject_html = ""
-    for i, c in enumerate(candidates):
+    all_candidates = top3 + backups
+    buyable_found = False
+
+    for i, c in enumerate(top3):
         cap_str = c.get("cap_str", "?")
         bd = c.get("boards", "?")
         flags_raw = c.get("flags", "")
@@ -146,8 +217,6 @@ def build_email(candidates, gate_verdict, holdings):
         open_p = q.get("open", "?")
         high_p = q.get("high", "?")
         prev = q.get("prev_close", "?")
-
-        # Check unfillable
         gs = is_gap_seal(open_p, high_p, prev)
 
         skip_reason = ""
@@ -167,22 +236,35 @@ def build_email(candidates, gate_verdict, holdings):
         if skip_reason:
             reject_html += f"<li>{c['code']} {c['name']} — {skip_reason}</li>"
         else:
-            try:
-                entry = float(price) if price != "?" else 0
-                shares = int(25000 / entry / 100) * 100 if entry > 0 else 0
-                amt = shares * entry
-                stop = round(entry * 0.95, 2)
-                tp1 = round(entry * 1.08, 2)
-                tp2 = round(entry * 1.15, 2)
-                buyable_html += f"""
-                <p><strong>✅ {c['code']} {c['name']} — {c['sector']}</strong></p>
-                <ul>
-                    <li>买入：T+1 开盘 ~¥{entry}，{shares} 股 ≈ ¥{amt:,.0f}</li>
-                    <li>止损：¥{stop}（ATR 1.0× max(5%, cap 10%)）</li>
-                    <li>止盈：TP1 ¥{tp1}（+8%）出一半，TP2 ¥{tp2}（+15%）清仓</li>
-                </ul>"""
-            except (ValueError, TypeError):
+            added, bh = add_buyable(c, price)
+            if added:
+                buyable_html += bh
+                buyable_found = True
+            else:
                 reject_html += f"<li>{c['code']} {c['name']} — 价格获取失败</li>"
+
+    # If no buyable from top3, try backups
+    backup_html = ""
+    if not buyable_found and backups:
+        backup_html = "<h2>替补（板块 leader 中的 cap-OK）</h2><table border='1' cellpadding='6' style='border-collapse:collapse;'><tr style='background:#f2f2f2;'><th>#</th><th>code</th><th>name</th><th>市值</th><th>连板</th><th>首封</th><th>flag</th></tr>"
+        for i, c in enumerate(backups[:5]):
+            cap_str = c.get("cap_str", "?")
+            bd = c.get("boards", "?")
+            cap_ok_flag = "✓" if cap_ok(cap_str) else "✗"
+            q = get_quote(c["code"])
+            price = q.get("price", "?")
+            open_p = q.get("open", "?")
+            high_p = q.get("high", "?")
+            prev = q.get("prev_close", "?")
+            gs = is_gap_seal(open_p, high_p, prev)
+            flag = "一字板" if gs else ("cap-NG" if not cap_ok(cap_str) else "cap-OK，未一字板")
+            backup_html += f"<tr><td>{i+1}</td><td>{c['code']}</td><td>{c['name']}</td><td>{cap_str}亿 {cap_ok_flag}</td><td>{bd}板</td><td>{c.get('first','?')}</td><td>{flag}</td></tr>"
+            if cap_ok(cap_str) and not gs and not buyable_found:
+                added, bh = add_buyable(c, price)
+                if added:
+                    buyable_html += bh
+                    buyable_found = True
+        backup_html += "</table>"
 
     # Holdings check
     h_html = ""
@@ -207,6 +289,8 @@ def build_email(candidates, gate_verdict, holdings):
         </table>
         <h2>买入建议</h2>
         {buyable_html or "<p>无可买入候选（全部 cap-NG / 一字板 / 高位风险）。</p>"}
+        {backup_html}
+        <h2>排除</h2>
         <h2>排除</h2>
         <ul>{reject_html}</ul>
         <hr>
@@ -244,12 +328,11 @@ def main():
     print(f"  {gate}")
 
     print("=== Step 2: Scan ===")
-    candidates = run_scan()
-    print(f"  {len(candidates)} candidates")
+    top3, backups = run_scan()
 
     print("=== Step 3: Validate & Build ===")
     holdings = read_chold()
-    html = build_email(candidates, gate, holdings)
+    html = build_email(top3, backups, gate, holdings)
 
     print("=== Step 4: Send ===")
     send_email(html, smtp_user, smtp_pwd, to_email)
