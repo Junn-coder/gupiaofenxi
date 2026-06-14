@@ -18,8 +18,9 @@ jobs:
 
       - name: Clone lifchang tools (scan_cn.py)
         run: |
-          git clone --depth 1 https://x-access-token:${{ secrets.LIFCHANG_ACCESS }}@github.com/Junn-coder/lifchang.git /tmp/lifchang 2>&1 || {
-            echo "::error::Clone failed. Ensure LIFCHANG_ACCESS secret is set with repo read access to Junn-coder/lifchang."
+          LIFCHANG_REPO="${LIFCHANG_REPO:-Junn-coder/lifchang}"
+          git clone --depth 1 https://x-access-token:${{ secrets.LIFCHANG_ACCESS }}@github.com/${LIFCHANG_REPO}.git /tmp/lifchang 2>&1 || {
+            echo "::error::Clone failed. Check: (1) LIFCHANG_ACCESS secret has repo-read scope, (2) repo path matches '${LIFCHANG_REPO}'"
             exit 1
           }
 
