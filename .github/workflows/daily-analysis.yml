@@ -2,8 +2,8 @@ name: Daily Stock Analysis
 
 on:
   schedule:
-    # 北京时间每天早上 8:00 执行（UTC 时间 00:00）
-    - cron: '0 0 * * *'
+    # 北京时间每天早上 9:00 执行（UTC 时间 00:00）
+    - cron: '0 1 * * *'
   workflow_dispatch:
 
 jobs:
