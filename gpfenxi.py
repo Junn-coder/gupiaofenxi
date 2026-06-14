@@ -27,13 +27,20 @@ def run(cmd, cwd=CTOOL, timeout=120):
 
 
 def run_gate():
-    """Step 1: index.py → gate verdict."""
+    """Step 1: index.py → gate verdict + detail."""
     out, err, rc = run("python index.py")
-    # parse verdict line
+    verdict = "GATE_UNKNOWN"
+    details = []
     for line in out.split("\n"):
         if "[Verdict]" in line:
-            return line.strip()
-    return "GATE_UNKNOWN"
+            verdict = line.strip()
+        # Capture index lines: "  上证综指 000001  ...  AMBER  broke the 10-day MA..."
+        if line.strip() and any(k in line for k in ["上证综指", "创业板指", "沪深300"]):
+            details.append(line.strip())
+        # Capture sentiment
+        if "limit-ups" in line or "warming" in line.lower() or "neutral" in line.lower() or "freeze" in line.lower():
+            details.append(line.strip())
+    return verdict, "<br>".join(details[-5:])  # last 5 relevant lines
 
 
 def run_scan():
@@ -94,6 +101,12 @@ def run_scan():
                     })
         if in_leader and not line.strip():
             current_sector = ""
+
+    # Sort backups: cap-OK first, then smaller cap (= more short-term upside potential)
+    backups.sort(key=lambda c: (
+        0 if cap_ok(c.get("cap_str", "0")) else 1,
+        float(c.get("cap_str", "9999")) if cap_ok(c.get("cap_str", "0")) else 9999
+    ))
 
     print(f"  top3: {len(top3)}, backups: {len(backups)}")
     return top3, backups
@@ -182,12 +195,15 @@ def cap_ok(cap_str):
         return False
 
 
-def build_email(top3, backups, gate_verdict, holdings):
+def build_email(top3, backups, gate_verdict, gate_detail, holdings):
     """Build HTML email in watchlistd format with top3 + backup coverage."""
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # Gate row
-    gate_html = f"<p><strong>闸门：{gate_verdict}</strong></p>"
+    gate_html = f"<p><strong>闸门：{gate_verdict}</strong><br><small>{gate_detail}</small></p>"
+    # Add AMBER/ebb note
+    if "AMBER" in gate_verdict:
+        gate_html += "<p><em>退潮 — 最多 2 槽，只做最强主线。</em></p>"
 
     # Candidates table (top3)
     table_rows = ""
@@ -282,7 +298,6 @@ def build_email(top3, backups, gate_verdict, holdings):
         {buyable_html or "<p>无可买入候选（全部 cap-NG / 一字板 / 高位风险）。</p>"}
         {backup_html}
         <h2>排除</h2>
-        <h2>排除</h2>
         <ul>{reject_html}</ul>
         <hr>
         {h_html}
@@ -315,15 +330,15 @@ def main():
         raise ValueError("Missing SMTP_USER / SMTP_PASSWORD / TO_EMAIL")
 
     print("=== Step 1: Gate ===")
-    gate = run_gate()
-    print(f"  {gate}")
+    gate_verdict, gate_detail = run_gate()
+    print(f"  {gate_verdict}")
 
     print("=== Step 2: Scan ===")
     top3, backups = run_scan()
 
     print("=== Step 3: Validate & Build ===")
     holdings = read_chold()
-    html = build_email(top3, backups, gate, holdings)
+    html = build_email(top3, backups, gate_verdict, gate_detail, holdings)
 
     print("=== Step 4: Send ===")
     send_email(html, smtp_user, smtp_pwd, to_email)
