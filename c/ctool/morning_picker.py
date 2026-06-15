@@ -9,7 +9,6 @@ import csv
 import json
 import glob
 import math
-from collections import defaultdict
 
 # Tuned parameters from analysis
 CONFIG = {
@@ -160,30 +159,15 @@ def main():
     print("MORNING STOCK PICKER — Top 3 pre-break candidates")
     print("="*80 + "\n")
 
-    # Load all stocks
-    stock_files_map = defaultdict(list)
-    for fpath in sorted(glob.glob('flat_data/*.csv')):
-        fname = os.path.basename(fpath)
-        stock_code = fname.split('_')[0]
-        stock_files_map[stock_code].append(fpath)
+    # Load all stocks from stock_history_ak (updated daily by downa.py)
+    stock_files = sorted(glob.glob('stock_history_ak/*.csv'))
 
-    print(f"Scanning {len(stock_files_map)} stocks...")
+    print(f"Scanning {len(stock_files)} stocks...")
 
     scores = []
-    for stock_code in stock_files_map:
-        # Load and concatenate all files for this stock
-        all_data = []
-        for fpath in sorted(stock_files_map[stock_code]):
-            data = load_stock_data(fpath)
-            all_data.extend(data)
-
-        # Remove duplicates
-        seen = set()
-        unique_data = []
-        for row in sorted(all_data, key=lambda r: r['date']):
-            if row['date'] not in seen:
-                unique_data.append(row)
-                seen.add(row['date'])
+    for fpath in stock_files:
+        stock_code = os.path.basename(fpath).replace('.csv', '')
+        unique_data = load_stock_data(fpath)
 
         if len(unique_data) < CONFIG['lookback_days']:
             continue

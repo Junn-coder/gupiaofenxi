@@ -389,7 +389,7 @@ TOP 15 SIGNALS (feature correlation with break):
         json.dump(train_data[:100], f, indent=2)  # first 100 for inspection
 
     with open(os.path.join(config['output_dir'], 'test_samples.json'), 'w') as f:
-        json.dump(test_data[:100], f, indent=2)
+        json.dump(test_data, f, indent=2)  # save ALL test samples for full verification
 
     config_out = config.copy()
     config_out['total_samples'] = len(feature_rows)
