@@ -121,7 +121,7 @@ cn_stock.py --history 是"验证"的一步。
   - 出现退避后的 "抓取被拒...已停止" 消息是正确行为，不是 bug ——
     等一会儿再重跑；它会抓取一次并缓存。
 
-source /home/wujun/git/lifchang/.venv/bin/activate
+source /home/wujun/git/gprun/.venv/bin/activate
 
 python tool/scan_cn.py -q
 
