@@ -4,7 +4,7 @@
 
 Rule 0:
 
-After every exchange, append my question and a concise answer to lifchan/c/cqa.md if topic is about
+After every exchange, append my question and a concise answer to gprun/c/cqa.md if topic is about
 China A stock or gprun/c/cqa.md if topic is about USA stock.
 
 
