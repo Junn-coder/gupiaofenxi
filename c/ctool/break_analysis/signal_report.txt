@@ -1,0 +1,44 @@
+
+================================================================================
+PRE-BREAK SIGNAL ANALYSIS (PURE PYTHON)
+================================================================================
+
+CONFIG:
+  Break threshold: 10%
+  Lookback days: 40
+  Lookahead days: 5
+  Train ratio: 0.6
+
+RESULTS:
+  Total windows: 1907
+  Train size: 1144 (952 breaks)
+  Test size: 763 (626 breaks)
+
+TOP 15 SIGNALS (feature correlation with break):
+
+  rsi..........................................   0.2828
+  high_pct_change..............................   0.2260
+  dist_to_ma20.................................   0.2157
+  close_pct_change.............................   0.2150
+  volatility...................................   0.2132
+  above_ma20...................................   0.2115
+  dist_to_ma10.................................   0.1959
+  vol_trend....................................   0.1885
+  above_ma10...................................   0.1855
+  vol_vs_ma....................................   0.1849
+  distance_from_5d_low.........................   0.1833
+  momentum.....................................   0.1765
+  dist_to_ma5..................................   0.1644
+  above_ma5....................................   0.1170
+  dist_to_52w_high.............................   0.0833
+
+INTERPRETATION:
+  - Features with high correlation are stronger predictors of pre-break state
+  - dist_to_maXX: distance to moving average (positive = above MA)
+  - vol_vs_ma: volume relative to 20-day MA (>1 = elevated volume)
+  - rsi: momentum oscillator (0-100)
+  - momentum: rate of price change (%)
+  - dist_to_52w_high: proximity to 52-week high (negative = below high)
+  - volatility: price swing magnitude (%)
+
+================================================================================

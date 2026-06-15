@@ -1,0 +1,16 @@
+{
+  "break_threshold": 0.1,
+  "lookback_days": 40,
+  "lookahead_days": 5,
+  "vol_sma_period": 20,
+  "rsi_period": 14,
+  "momentum_period": 10,
+  "ma_periods": [
+    5,
+    10,
+    20,
+    60
+  ],
+  "distance_to_52wk_high": true,
+  "train_ratio": 0.6
+}

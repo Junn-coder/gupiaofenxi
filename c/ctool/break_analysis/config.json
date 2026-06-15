@@ -1,0 +1,24 @@
+{
+  "break_threshold": 0.1,
+  "lookback_days": 40,
+  "lookahead_days": 5,
+  "vol_sma_period": 20,
+  "vol_expansion_threshold": 1.5,
+  "ma_periods": [
+    5,
+    10,
+    20,
+    60
+  ],
+  "rsi_period": 14,
+  "momentum_period": 10,
+  "distance_to_52wk_high": true,
+  "train_ratio": 0.6,
+  "output_dir": "break_analysis",
+  "sample_size_limit": null,
+  "total_samples": 1907,
+  "train_samples": 1144,
+  "test_samples": 763,
+  "train_breaks": 952,
+  "test_breaks": 626
+}
