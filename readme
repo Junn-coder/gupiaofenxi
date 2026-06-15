@@ -119,7 +119,7 @@ Anti-block design (so this PC never gets banned by Eastmoney):
   - A backed-off "抓取被拒...已停止" message is correct behavior, not a bug --
     wait a while and re-run; it'll fetch once and cache.
 
-source /home/wujun/git/lifchang/.venv/bin/activate
+source /home/wujun/git/gprun/.venv/bin/activate
 
 python tool/scan_cn.py -q
 
