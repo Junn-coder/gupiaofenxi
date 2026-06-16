@@ -5,15 +5,14 @@ Background (read first, treat as my rules — don't re-derive them):
 Read frame.md and follow it in profit-seeking mode. frame.md is the single source of truth.
 
 Tools (RUN them, don't reason from memory):
+- u/utool/us_gate.py — Layer-1 gate: SPY vs 50MA, VIX, 档位判定
 - u/utool/downu.py — refresh daily price data for all watchlist + bought tickers
 - u/utool/utrend.py — Trend Template 9条 scoring (need 8/9, #1/#5/#8/#9 mandatory)
 
-Gate (check manually, no tool — ask me or use web):
-- VIX < 20 → 健康 (build normally); VIX 20-30 → 谨慎 (no new builds); VIX > 30 → 高风险 (reduce/cash)
-- SPY above 50-day MA and sloping up? Distribution days (rolling 25d) ≤ 3?
-- Per frame.md §5: 档位一 = 正常建仓; 档位二 = 停止新建仓; 档位三 = 减仓/现金
+Gate (run us_gate.py):
+- u/utool/us_gate.py → outputs SPY/VIX/档位判定 directly
 
-After running tools, write the output to u/outputs/output_<date>.md in this format:
+After running tools, write the output to u/outputs/current.md (fixed name, no date stamp) in this format:
 
 ```
 # US Stock Session — YYYY-MM-DD (周X)
@@ -60,4 +59,4 @@ Rules:
 - Tone: terse, decisive, executable. Account size is in frame.md — don't ask.
 
 ==
-"Run the US stock session per frame.md: gate check, downu.py refresh, utrend.py score, produce A-class entry cards + holding checks. Write to u/outputs/output_<date>.md."
+"Run the US stock session per frame.md: gate check, downu.py refresh, utrend.py score, produce A-class entry cards + holding checks. Write to u/outputs/current.md."
