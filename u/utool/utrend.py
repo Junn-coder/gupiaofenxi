@@ -2,7 +2,7 @@
 """
 US Trend-Template scorecard — scores each price_<T>.txt against frame.md 第三层.
 
-frame.md Trend Template (10 conditions, need >=8/10; #1/#5/#9/#10 are mandatory):
+frame.md Trend Template (9 conditions, need >=8/9; #1/#5/#8/#9 are mandatory):
   1. price > 150MA > 200MA
   2. 200MA rising >= ~1 month (today's 200MA > 200MA ~21 trading days ago)
   3. 150MA > 200MA
@@ -78,7 +78,7 @@ def score(df):
             return None
         return series.iloc[-1] > series.iloc[-1 - lag]
 
-    # #9 weekly
+    # #8 weekly
     w_ok = None
     if wma30.notna().sum() >= 1 and len(wk) >= 13:
         above_now = wk.iloc[-1] > wma30.iloc[-1]
@@ -89,7 +89,7 @@ def score(df):
     else:
         w_detail = "数据不足"
 
-    # #10 monthly
+    # #9 monthly
     m_ok = None
     if mma12.notna().sum() >= 1 and len(mo) >= 6:
         above_now = mo.iloc[-1] > mma12.iloc[-1]
@@ -108,9 +108,8 @@ def score(df):
         5: price > m50,
         6: price >= 1.30 * lo52,
         7: price >= 0.75 * hi52,
-        8: None,                 # RS — needs market data
-        9: w_ok,
-        10: m_ok,
+        8: w_ok,
+        9: m_ok,
     }
 
     # Weinstein stage (simplified, from 30-week MA = weekly)
@@ -125,7 +124,7 @@ def score(df):
 
     computable = [k for k in conds if conds[k] is not None]
     passed = sum(1 for k in computable if conds[k])
-    mand = {1: conds[1], 5: conds[5], 9: conds[9], 10: conds[10]}
+    mand = {1: conds[1], 5: conds[5], 8: conds[8], 9: conds[9]}
     mand_ok = all(v for v in mand.values() if v is not None)
 
     return {
@@ -141,7 +140,7 @@ def score(df):
 
 def cells(conds):
     out = []
-    for k in range(1, 11):
+    for k in range(1, 10):
         v = conds[k]
         mark = "?" if v is None else ("✓" if bool(v) else "✗")  # bool() handles numpy bool
         out.append(f"#{k}{mark}")
@@ -173,7 +172,7 @@ def main():
         verdict = "买点候选(过)" if (r["passed"] >= 8 and r["mand_ok"]) else "未过"
         print(f"\n=== {t} ===  收 ${r['price']:.2f} ({r['last_date']})   "
               f"{r['passed']}/{r['n']} 条过, 强制项{'OK' if r['mand_ok'] else '未满足'}, Stage {r['stage']}  -> {verdict}")
-        print(f"  {cells(r['conds'])}   (#8 RS=N/A 需全市场数据)")
+        print(f"  {cells(r['conds'])}")
         print(f"  50MA {r['ma50']:.1f}  150MA {r['ma150']:.1f}  200MA {r['ma200']:.1f}")
         print(f"  距52周低 {r['from_low']:+.0f}%  距52周高 {r['from_high']:+.0f}%  (高{r['hi52']:.0f}/低{r['lo52']:.0f})")
         print(f"  周线 {r['w_detail']}")

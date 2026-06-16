@@ -1,12 +1,12 @@
 Background (read first, treat as my rules — don't re-derive them):
-- u/tastes/frame.md — full US stock discipline: CAN SLIM + Trend Template 10条 + Weinstein Stage + VCP + 持仓/卖出/加仓/仓位
+- u/tastes/frame.md — full US stock discipline: Trend Template 9条 + Weinstein Stage + VCP + 持仓/卖出/加仓/仓位
 - u/buylists/uwatchlist.md — current watchlist (A/B/C class candidates)
 - u/buylists/bought.md — current positions (cost, stop, P&L)
 Read frame.md and follow it in profit-seeking mode. frame.md is the single source of truth.
 
 Tools (RUN them, don't reason from memory):
 - u/utool/downu.py — refresh daily price data for all watchlist + bought tickers
-- u/utool/utrend.py — Trend Template 10条 scoring (need 8/10, #1/#5/#9/#10 mandatory)
+- u/utool/utrend.py — Trend Template 9条 scoring (need 8/9, #1/#5/#8/#9 mandatory)
 
 Gate (check manually, no tool — ask me or use web):
 - VIX < 20 → 健康 (build normally); VIX 20-30 → 谨慎 (no new builds); VIX > 30 → 高风险 (reduce/cash)
