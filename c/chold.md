@@ -4,11 +4,12 @@
 
 002085 1800 13.61, set stop at -8% and 20%
 
-301387 200 120.60 set stop at -16% and 19%
+301387 sold 100 at ~114.50. (loss -¥610)
+301387 100 120.60, set stop at -16% and 19%
 
 601166 40000 23.03
 
 002078 300 14.93
 
 ---
-Realized P&L: -¥857 (2 closed, 2 open)
+Realized P&L: -¥1,467 (3 closed)

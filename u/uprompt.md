@@ -72,6 +72,7 @@ Rules:
 - 股数 = 单笔最大可亏 / (入场价 − 止损价), per frame.md §E.
 - 量规则: 1.5-5.0x 20日均量; <1.5x 缩量不算, ≥5.0x 衰竭量放弃.
 - 距50MA规则: 5-40% (理想 5-15%); >40% 不追.
+- 均线边缘规则: 当 150MA 与 200MA 差距 < 1% 时，TT 评分即使 9/9 也不建仓（均线即将死叉，信号脆弱）。
 - For bought.md holdings: check stop (周线收盘), trailing stop tier, time-to-earnings.
 - If a tool fails, tell me and I'll paste data.
 - Tone: terse, decisive, executable. Account size is in frame.md — don't ask.
