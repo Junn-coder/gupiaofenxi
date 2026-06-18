@@ -11,9 +11,10 @@ Features are computed with NO forward data (we score "today"), using the exact
 same formulas as build_turn_dataset.build_one + engineered features from winner_study.
 
 Usage:
-    python predict_break.py                       # latest trading day, score >= 60
+    python predict_break.py                       # latest trading day, score >= 60, GREEN regime gate
     python predict_break.py --date 2026-05-20
     python predict_break.py --min-score 50 --top 30
+    python predict_break.py --no-regime-filter    # skip regime gate
     python predict_break.py -q                    # save file only
 
 Output: share_data/predict_<date>.txt
@@ -22,10 +23,13 @@ import os
 import csv
 import sys
 import argparse
+from io import StringIO
 
 import numpy as np
 import pandas as pd
 import joblib
+
+from index import classify_index, overall_light, INDEXES
 
 TOOL_DIR = os.path.dirname(os.path.abspath(__file__))
 HISTORY_DIR = os.path.join(TOOL_DIR, "stock_history_ak")
@@ -35,6 +39,32 @@ MODEL_PATH = os.path.join(SHARE_DIR, "break_scorer.joblib")
 CAL_FILE = os.path.join(HISTORY_DIR, "000001.csv")
 
 BEFORE = 20
+
+
+def check_market_regime(target_date):
+    """Read cached index files, classify up to target_date. Returns
+    (can_trade: bool, light: str, per_index: dict). GREEN → trade, else wait."""
+    per_index = {}
+    for code, name, _symbol in INDEXES:
+        path = os.path.join(SHARE_DIR, f"index_{code}.txt")
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = f.readlines()
+            hdr = next(i for i, ln in enumerate(lines) if ln.startswith("Date,"))
+            df = pd.read_csv(StringIO("".join(lines[hdr:])))
+            df["Date"] = df["Date"].astype(str)
+            df = df[df["Date"] <= str(target_date)[:10]]
+            if len(df) >= 12:
+                per_index[code] = classify_index(df)
+        except Exception:
+            continue
+
+    if not per_index:
+        return False, "UNKNOWN", per_index
+    light = overall_light(per_index)
+    return light == "GREEN", light, per_index
 
 
 def load_meta():
@@ -122,6 +152,8 @@ def main():
     ap.add_argument("--date", help="trading day YYYY-MM-DD (default: latest)")
     ap.add_argument("--min-score", type=float, default=60.0, help="show stocks scoring >= this (default 60)")
     ap.add_argument("--top", type=int, default=None, help="cap the list to N best (optional)")
+    ap.add_argument("--no-regime-filter", action="store_true",
+                    help="skip market-regime gate (default: filter when regime is not GREEN)")
     ap.add_argument("-q", "--quiet", action="store_true", help="save file only, no stdout")
     args = ap.parse_args()
 
@@ -134,6 +166,39 @@ def main():
     cal = pd.read_csv(CAL_FILE, parse_dates=["Date"])
     target = pd.Timestamp(args.date) if args.date else cal["Date"].max()
 
+    # ── market regime gate ──
+    if not args.no_regime_filter:
+        can_trade, light, per_index = check_market_regime(target)
+        if not can_trade:
+            ts = target.date()
+            lines = [
+                f"predict_break — {ts}  (market regime: {light} — SKIPPED)",
+                "",
+                "[Regime detail]",
+            ]
+            for code, name, _sym in INDEXES:
+                c = per_index.get(code)
+                if c:
+                    lines.append(f"  {name} {code}: {c['light']}  close={c['close']:.1f}  "
+                                 f"chg={c['chg']:+.2f}%  {c['why'][:60]}")
+                else:
+                    lines.append(f"  {name} {code}: (no data)")
+            lines.append("")
+            lines.append(f"[Verdict]  {light} — no candidates generated (regime gate active)")
+            lines.append("  run with --no-regime-filter to bypass")
+            report = "\n".join(lines)
+            os.makedirs(SHARE_DIR, exist_ok=True)
+            out_path = os.path.join(SHARE_DIR, f"predict_{target.date()}.txt")
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(report + "\n")
+            if not args.quiet:
+                print(report)
+            print(f"\nsaved -> {out_path}", file=sys.stderr)
+            return
+        if not args.quiet:
+            print(f"[Regime] {light} → scanning...")
+
+    # ── score every stock ──
     meta = load_meta()
     files = sorted(f for f in os.listdir(HISTORY_DIR) if f.endswith(".csv"))
 
