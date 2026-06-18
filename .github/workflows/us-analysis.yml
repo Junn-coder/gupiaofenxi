@@ -2,6 +2,9 @@ name: US Stock Analysis
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'u/.trigger'
 
 jobs:
   us-analysis:
@@ -38,7 +41,6 @@ jobs:
           "
 
       - name: Run gate check
-        id: gate
         run: |
           echo "=== GATE ===" > /tmp/us_report.txt
           cd u/utool && python us_gate.py >> /tmp/us_report.txt 2>&1 || true
@@ -47,6 +49,7 @@ jobs:
         run: |
           echo "" >> /tmp/us_report.txt
           echo "=== DATA REFRESH ===" >> /tmp/us_report.txt
+          mkdir -p u/ushare_data
           cd u/utool && python downu.py AMD LRCX WDC NVDA AVGO VRT LITE GEV ETN GD AAOI SNDK HWM CW >> /tmp/us_report.txt 2>&1 || true
 
       - name: Run Trend Template scan
@@ -73,6 +76,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add u/current.md u/ushare_data/
+          git add u/current.md
           git diff --cached --quiet || git commit -m "data: US analysis $(TZ='America/New_York' date '+%Y-%m-%d %H:%M') ET"
           git push
