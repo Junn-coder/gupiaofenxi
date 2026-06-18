@@ -152,8 +152,20 @@ def main():
     order = np.argsort(np.abs(coef))[::-1][:10]
 
     def explain(name):
+        engineered = {
+            "mom20": "20-day momentum (%)",
+            "mom5": "5-day momentum (%)",
+            "pct_from_high250": "distance from 250d high (%)",
+            "vol_ratio20": "volume / prior 20d avg",
+            "ma_aligned": "MA 5>10>20 aligned (0/1)",
+            "above_ma20": "close above 20d MA (0/1)",
+            "range_contract": "5d range / 20d range",
+            "turnover_yi": "daily turnover (100M yuan)",
+        }
+        if name in engineered:
+            return engineered[name]
         if name == "mcap_b":
-            return "market cap"
+            return "market cap (B yuan)"
         if name.startswith("vr"):
             k = int(name[2:]); return f"volume ratio, day D-{BASE-1-k}"
         k = int(name[1:]); return f"daily return, day D-{BASE-1-k}"

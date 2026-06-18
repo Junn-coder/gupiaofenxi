@@ -5,16 +5,19 @@ train_break.py — train a 0-100 scorer that gives HIGH scores to break_data sam
 
 Target separation:  break_data -> score > 60 ,  flat_data -> score < 30.
 
-Features = the BEFORE-window only (first 20 days), no look-ahead:
+Features = the BEFORE-window (20 days), no look-ahead:
     r0..r19   daily return %     (r19 = decision day D, r0 = D-19)
-    vr0..vr19 volume / 20-day-window average volume
+    vr0..vr19 volume / 20d-window average volume
     mcap_b    float market cap (B yuan)
-computed from full stock history up to and including D, where (code, D) are parsed from
-each sample's filename <code>_<YYYYMMDD>.csv. The up-leg / flat-leg (days 21-30) is never seen.
+    + 8 engineered: mom20, mom5, pct_from_high250, vol_ratio20,
+      ma_aligned, above_ma20, range_contract, turnover_yi
+    + 5 waking-up: consec_up, vol_expand, close_high_pct, gap_up, green_count5
+computed from full stock history up to D via build_turn_dataset.build_one.
+The forward leg (HOLD days after D) is never seen.
 
-Holds out 20% (stratified) as an honest test. Trains gradient-boosted trees + logistic
-regression, scales probabilities to 0-100, reports the 60/30 separation + AUC, and the
-logistic readout of the strongest precursors. Saves the better model.
+Holds out 20% (stratified). Trains HistGB + logistic, reports separation + AUC
+at HIGH/LOW thresholds, and the logistic readout of strongest precursors.
+Saves the better model.
 
 Output: share_data/break_scorer.joblib   All data local.
 """
@@ -44,6 +47,9 @@ SHARE_DIR = os.path.join(TOOL_DIR, "share_data")
 MODEL_PATH = os.path.join(SHARE_DIR, "break_scorer.joblib")
 
 BEFORE = 20
+HOLD = 5
+WIN_PCT = 10.0
+DD_TOL = 5.0
 HIGH, LOW = 60.0, 30.0
 SEED = 42
 FNAME_RE = re.compile(r"^(\d{6})_(\d{8})\.csv$")
@@ -67,7 +73,9 @@ def collect(minnet=None, years=None):
             if lab == 1 and minnet is not None:
                 try:
                     s = pd.read_csv(os.path.join(d, fn))
-                    entry, exit_ = s["Open"].iloc[20], s["Close"].iloc[29]
+                    entry_idx = BEFORE  # first day after lookback
+                    exit_idx = BEFORE + HOLD - 1  # HOLD trading days later (0-based)
+                    entry, exit_ = s["Open"].iloc[entry_idx], s["Close"].iloc[exit_idx]
                     if (exit_ - entry) / entry * 100 < minnet:
                         continue
                 except Exception:
@@ -85,7 +93,7 @@ def collect(minnet=None, years=None):
         if df.empty or "Close" not in df.columns:
             missing += len(datemap)
             continue
-        out, feat_cols = build_one(df, mcap.get(code, np.nan), BEFORE, 10, 10.0, 5.0)
+        out, feat_cols = build_one(df, mcap.get(code, np.nan), BEFORE, HOLD, WIN_PCT, DD_TOL)
         out = out.set_index("Date")
         for dt, lab in datemap.items():
             if dt in out.index:
@@ -172,9 +180,29 @@ def main():
     order = np.argsort(np.abs(coef))[::-1][:10]
 
     def explain(name):
+        engineered = {
+            "mom20": "20-day momentum (%)",
+            "mom5": "5-day momentum (%)",
+            "pct_from_high250": "distance from 250d high (%)",
+            "vol_ratio20": "volume / prior 20d avg",
+            "ma_aligned": "MA 5>10>20 aligned (0/1)",
+            "above_ma20": "close above 20d MA (0/1)",
+            "range_contract": "5d range / 20d range",
+            "turnover_yi": "daily turnover (100M yuan)",
+        }
+        waking = {
+            "consec_up": "consecutive green days ending at D",
+            "vol_expand": "vol[D] > vol[D-1] > vol[D-2]",
+            "close_high_pct": "(close-low)/(high-low)*100",
+            "gap_up": "open[D] gap vs close[D-1] (%)",
+            "green_count5": "up days in last 5",
+        }
+        if name in engineered:
+            return engineered[name]
+        if name in waking:
+            return waking[name]
         if name == "mcap_b":
-            return "market cap"
-        kind, k = name[:2] if name.startswith("vr") else name[0], None
+            return "market cap (B yuan)"
         if name.startswith("vr"):
             k = int(name[2:]); return f"volume ratio, day D-{19-k}"
         k = int(name[1:]); return f"daily return, day D-{19-k}"

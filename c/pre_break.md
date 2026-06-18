@@ -294,34 +294,104 @@ mcap "where are the fish" (generic +10% bar): mid-large 35-80B best (1.1x), smal
 0.7-8.4B worst (0.9x) — the "small caps move more" intuition is NOT supported here. mcap_b
 is carried as a feature/output so pre_break can report each pick's cap band.
 
-### Next levers (NOT done — J to pick)
+### 2026-06-18: ENGINEERED FEATURES ADDED ✅
 
-1. Add engineered features (mom20, dist-from-250d-high, vol_ratio20, MA-aligned,
-   range-contraction) on top of the raw sequence — attacks the AUC ceiling with features
-   winner_study already PROVED carry signal. RECOMMENDED first move.
-2. Lengthen the before-window (period 40/60) for more context per sample.
-3. Accept the 0.72 ceiling; pick ONE operating point (favour flat-rejection OR break-recall).
-4. Accept that the turn may not be pre-visible from price/volume alone -> this line is done.
+The 8 winner_study-proven features (mom20, mom5, pct_from_high250, vol_ratio20, ma_aligned,
+above_ma20, range_contract, turnover_yi) were added to `build_one()` in `build_turn_dataset.py`,
+and `predict_break.py` / `predict_backtest.py` were updated to match.
 
-The current saved model (balanced GB) does NOT meet the 60/30 goal — do not wire it into
-live picking yet.
+**Training results (49 features vs old 41):**
 
----
+```
+                          break>60   flat<30   combined   AUC
+New (HistGB, unbalanced)   71.6%      58.1%      64.8%     0.816
+New (Logistic)             53.6%      35.7%      44.7%     0.778
+Old (HistGB, unbalanced)   82%         9%        45.6%     0.727
+```
 
-1. ADD ENGINEERED FEATURES   <- highest leverage, and we've NEVER tried it
-   The model currently sees only raw daily returns + volume ratios. It has to
-   REINVENT the things winner_study already PROVED predictive:
-     mom20, distance-from-250d(52wk)-high, vol_ratio20, MA 5>10>20 aligned,
-     range contraction, turnover.
-   These are aggregate/nonlinear — raw dailies can't easily reconstruct them.
-   This is THE untried lever and the most likely to add real AUC.
+AUC jumped from 0.727 → 0.816 (+9 pts) and combined separation improved from 45.6% → 64.8%.
+The model now strongly weights pullback signals: r19 (D-day return) coefficient -0.881 and
+mom20 coefficient -0.631 — it's learned that stocks pulling back from high momentum are
+better bets than stocks still running.
 
-2. KEEP WINDOW SHORT (20, test 10-15) + ADD 2024 BACK
-   Short window = less noise. Re-including 2024 ~doubles training data ->
-   less overfit -> better held-out AUC. (We deleted 2024 earlier; bring it back.)
+**Temporal backtest (Mar-May 2026, top 10/day):**
 
-3. SHARPEN THE BAR (+20%)
-   +10->+15 already lifted 0.72->0.80. +20% may add more (sharper fingerprint),
-   but fewer samples -> watch the train/test gap for overfit.
+| Threshold | Hit rate | Avg return | Median | vs Market baseline |
+|-----------|----------|------------|--------|--------------------|
+| +7%  | 44.0% | +7.47% | +3.62% | +1.23% |
+| +20% | 22.1% | +7.47% | +3.62% | +1.23% |
 
-4. MODEL HYPERPARAMS (depth/leaves/L2) — last, ~0.01-0.02 only.
+At the +7% bar: 44% hit rate, +7.47% avg — beats the momentum-gate scanner's best half
+(H2 2025: 38.8%, +5.62%). Model buys dips (avg decision-day return -4.34%).
+
+**Strongest predictors (logistic standardized):**
+
+| Rank | Feature | Coef | Interpretation |
+|------|---------|------|----------------|
+| 1 | r19 | -0.881 | Today's return — negative = good |
+| 2 | mom20 | -0.631 | High momentum = already extended |
+| 3 | r17 | +0.519 | D-2 return positive = good |
+| 4 | vr19 | -0.483 | Low volume on dip day = good |
+| 5 | r18 | +0.482 | D-1 return positive = good |
+| 7 | vol_ratio20 | +0.374 | High relative volume = good |
+
+Files updated: `build_turn_dataset.py`, `train_break.py`, `train_break40.py`,
+`train_break60.py`, `predict_break.py`, `predict_backtest.py`. Model saved as
+`share_data/break_scorer.joblib`.
+
+**Verdict**: engineered features lifted the ceiling. The model is now a practical
+dip-buying scorer with real out-of-sample edge over the momentum-gate scanner.
+Keep it.
+
+### 2026-06-18: 5-DAY HOLD + WAKING-UP FEATURES ✅
+
+Two key changes driven by the insight that shorter hold = cleaner signal and that
+detecting "ignition" (the stock stirring right now) matters more than 20-day shape:
+
+1. **HOLD shortened from 10d → 5d**: quicker feedback, less noise accumulation
+2. **5 waking-up features added**: `consec_up` (consecutive green days), `vol_expand`
+   (volume expansion D>D-1>D-2), `close_high_pct` (closing strength 0-100),
+   `gap_up` (open gap vs yesterday's close), `green_count5` (up days in last 5)
+
+**Training on full turn_dataset (307K rows, 54 features):**
+
+```
+HistGB  AUC=0.748  (on ALL stock-days, not just momentum-gated)
+  score>=60  precision=17.7%  recall=49.8%
+  score>=70  precision=22.4%  recall=26.6%
+  score>=80  precision=33.2%  recall= 4.7%
+```
+
+**Temporal backtest (Jan-May 2026, top 10/day):**
+
+| Model | Hold | Hit +7% | Hit +10% | Avg ret | Median | Day-of ret |
+|-------|------|---------|----------|---------|--------|------------|
+| Old (10d, eng feats) | 10d | 44.0% | 22.6% | +2.69% | +0.80% | -4.73% (dips) |
+| **New (5d, +waking)** | **5d** | **41.9%** | **34.8%** | **+5.37%** | **+3.34%** | **+2.22%** (strength) |
+
+Note: +10% in 5 days is HARDER than +10% in 10 days. Despite that:
+- Hit rate at +10%: 22.6% → **34.8%** (+12.2 pts, +54% relative)
+- Avg return: +2.69% → **+5.37%** (+2.68 pts)
+- Median: +0.80% → **+3.34%** (+2.54 pts)
+- **Day-of return flipped from -4.73% (buying dips) to +2.22% (buying strength)**
+
+The model no longer hunts falling knives. It buys stocks already stirring today,
+holds 5 days, and wins ~35% of the time at +10% with +5.4% average return.
+
+**Key predictors (logistic):**
+
+| Rank | Feature | Coef | Interpretation |
+|------|---------|------|----------------|
+| 1 | vr19 | +0.321 | High relative volume on D-day = erupt |
+| 2 | vol_ratio20 | -0.249 | Already-elevated 20d volume = bad |
+| 3 | turnover_yi | +0.216 | High absolute turnover = good |
+| 4 | mom20 | -0.181 | Over-extended = less likely |
+| 5 | close_high_pct | -0.123 | Already closed near high = less room |
+
+**Files changed**: `build_turn_dataset.py` (HOLD=5, +5 waking features),
+`train_break.py` (hold/wake constants, explain()), `predict_break.py` (waking
+features in features_at()), `predict_backtest.py` (HOLD=5, waking features,
+close_high_pct fix). Old model backed up as `break_scorer_10d.joblib`.
+
+**Verdict**: 5-day hold + waking features is the best model yet. Higher hit rate on
+a harder task, better returns, and no more dip-buying. Keep it as default.

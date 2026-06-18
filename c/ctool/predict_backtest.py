@@ -33,7 +33,7 @@ SHARE_DIR = os.path.join(TOOL_DIR, "share_data")
 MODEL_PATH = os.path.join(SHARE_DIR, "break_scorer.joblib")
 
 BEFORE = 20
-HOLD = 10
+HOLD = 5
 
 
 def parse_day(s):
@@ -89,6 +89,8 @@ def main():
         dates = df["Date"].values
         o = df["Open"].to_numpy(float)
         c = df["Close"].to_numpy(float)
+        h = df["High"].to_numpy(float)
+        l = df["Low"].to_numpy(float)
         v = df["Volume"].to_numpy(float)
         ret = np.empty(len(c)); ret[0] = np.nan
         ret[1:] = (c[1:] / c[:-1] - 1) * 100
@@ -108,6 +110,46 @@ def main():
             cols[f"r{k}"] = ret[vi - off]
             with np.errstate(divide="ignore", invalid="ignore"):
                 cols[f"vr{k}"] = v[vi - off] / volavg[vi]
+
+        # engineered features (same formulas as build_one, no look-ahead)
+        cols["mom20"] = (c[vi] / c[vi - 20] - 1) * 100
+        cols["mom5"] = (c[vi] / c[vi - 5] - 1) * 100
+        high250 = pd.Series(h).rolling(250).max().to_numpy()
+        cols["pct_from_high250"] = (c[vi] - high250[vi]) / high250[vi] * 100
+        vol20p = pd.Series(v).shift(1).rolling(20).mean().to_numpy()
+        cols["vol_ratio20"] = v[vi] / vol20p[vi]
+        ma5 = pd.Series(c).rolling(5).mean().to_numpy()
+        ma10 = pd.Series(c).rolling(10).mean().to_numpy()
+        ma20 = pd.Series(c).rolling(20).mean().to_numpy()
+        cols["ma_aligned"] = ((ma5[vi] > ma10[vi]) & (ma10[vi] > ma20[vi])).astype("int8")
+        cols["above_ma20"] = (c[vi] > ma20[vi]).astype("int8")
+        rng = pd.Series(h - l)
+        rng5 = rng.rolling(5).mean().to_numpy()
+        rng20 = rng.rolling(20).mean().to_numpy()
+        cols["range_contract"] = rng5[vi] / rng20[vi]
+        cols["turnover_yi"] = v[vi] * c[vi] / 1e8
+
+        # waking-up features (ignition detection)
+        # consec_up: count consecutive green days ending at each vi
+        up_arr = (ret > 0).astype(int)
+        consec = np.zeros(len(vi), dtype=float)
+        for j, idx in enumerate(vi):
+            cnt = 0
+            for k in range(idx, max(idx - 20, 0), -1):
+                if up_arr[k]:
+                    cnt += 1
+                else:
+                    break
+            consec[j] = cnt
+        cols["consec_up"] = consec
+        cols["vol_expand"] = ((v[vi] > v[vi - 1]) & (v[vi - 1] > v[vi - 2])).astype("int8")
+        denom = h[vi] - l[vi]
+        cols["close_high_pct"] = np.where(denom > 0, (c[vi] - l[vi]) / denom * 100, 50.0)  # 50=mid if no range
+        cols["gap_up"] = (o[vi] - c[vi - 1]) / c[vi - 1] * 100
+        cols["green_count5"] = ((ret[vi - 4] > 0).astype(int) + (ret[vi - 3] > 0).astype(int) +
+                                (ret[vi - 2] > 0).astype(int) + (ret[vi - 1] > 0).astype(int) +
+                                (ret[vi] > 0).astype(int))
+
         mb = (mcap.get(code, np.nan) / 1e9) if np.isfinite(mcap.get(code, np.nan)) else mcap_med
         X = np.empty((len(vi), len(feat_cols)))
         for ci, name in enumerate(feat_cols):
@@ -140,7 +182,7 @@ def main():
 
     lines = []
     lines.append(f"predict_backtest  {d0.date()} -> {d1.date()}   top {args.top}/day")
-    lines.append(f"model: {bundle.get('kind','?')}   hit = forward >= +{args.win:.0f}% (10-day)")
+    lines.append(f"model: {bundle.get('kind','?')}   hit = forward >= +{args.win:.0f}% ({HOLD}-day)")
     lines.append("=" * 64)
     lines.append(f"pick-days .............. {len(per_day)}")
     lines.append(f"picks graded ........... {len(picks)}")

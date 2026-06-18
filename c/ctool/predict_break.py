@@ -2,13 +2,13 @@
 """
 predict_break.py — STEP 4: apply the trained scorer live.
 
-For a given date it computes the SAME 20-day features used in training (r0..r19 daily
-return %, vr0..vr19 volume / 20d-avg, mcap_b) for every stock, loads break_scorer.joblib,
-and prints the stocks scoring highest (0-100). This is the payoff: buyable candidates,
-not just an AUC.
+For a given date it computes the SAME features used in training (raw r0..r19, vr0..vr19,
++ 8 engineered features: mom20, mom5, pct_from_high250, vol_ratio20, ma_aligned,
+above_ma20, range_contract, turnover_yi, mcap_b) for every stock, loads
+break_scorer.joblib, and prints the stocks scoring highest (0-100).
 
-Features here are computed with NO forward data (we score "today"), but with the exact
-same formulas as build_turn_dataset.build_one, so live scores match training.
+Features are computed with NO forward data (we score "today"), using the exact
+same formulas as build_turn_dataset.build_one + engineered features from winner_study.
 
 Usage:
     python predict_break.py                       # latest trading day, score >= 60
@@ -54,30 +54,65 @@ def load_meta():
 
 
 def features_at(df, mcap, target_ts, feat_cols):
-    """20-day feature vector at target_ts, same formulas as build_one. None if not scorable."""
+    """Feature vector at target_ts using build_one-compatible formulas. None if not scorable."""
     df = df.sort_values("Date").reset_index(drop=True)
     idx = df.index[df["Date"] == target_ts]
     if len(idx) == 0:
         return None
     i = int(idx[0])
-    if i < BEFORE:                      # need 20 returns -> >= 20 prior rows
+    if i < 249:                         # need 250-day high + 20 returns
         return None
-    c, v = df["Close"], df["Volume"]
+    c, h, l, v = df["Close"], df["High"], df["Low"], df["Volume"]
+
+    # raw daily features
     ret = (c / c.shift(1) - 1) * 100
     vavg = v.iloc[i - (BEFORE - 1): i + 1].mean()
     if not np.isfinite(vavg) or vavg == 0:
         return None
     feat = {}
     for k in range(BEFORE):
-        j = i - (BEFORE - 1 - k)        # r0 oldest ... r19 = day i
+        j = i - (BEFORE - 1 - k)
         feat[f"r{k}"] = float(ret.iloc[j])
         feat[f"vr{k}"] = float(v.iloc[j] / vavg)
     feat["mcap_b"] = (mcap / 1e9) if (mcap and np.isfinite(mcap)) else np.nan
+
+    # engineered features (same formulas as build_one, no look-ahead)
+    feat["mom20"] = float((c.iloc[i] / c.iloc[i - 20] - 1) * 100)
+    feat["mom5"] = float((c.iloc[i] / c.iloc[i - 5] - 1) * 100) if i >= 5 else np.nan
+    high250 = h.iloc[i - 249:i + 1].max()
+    feat["pct_from_high250"] = float((c.iloc[i] - high250) / high250 * 100)
+    vol20_prior = v.iloc[i - 20:i].mean()
+    feat["vol_ratio20"] = float(v.iloc[i] / vol20_prior) if vol20_prior > 0 else np.nan
+    ma5 = c.iloc[i - 4:i + 1].mean()
+    ma10 = c.iloc[i - 9:i + 1].mean()
+    ma20 = c.iloc[i - 19:i + 1].mean()
+    feat["ma_aligned"] = int(ma5 > ma10 > ma20)
+    feat["above_ma20"] = int(c.iloc[i] > ma20)
+    rng = h - l
+    rng5 = rng.iloc[i - 4:i + 1].mean()
+    rng20 = rng.iloc[i - 19:i + 1].mean()
+    feat["range_contract"] = float(rng5 / rng20) if rng20 > 0 else np.nan
+    feat["turnover_yi"] = float(v.iloc[i] * c.iloc[i] / 1e8)
+
+    # waking-up features (ignition detection, same formulas as build_one)
+    up_series = (ret > 0).astype(int)
+    consec = 0
+    for k in range(i, max(i - 20, -1), -1):
+        if up_series.iloc[k]:
+            consec += 1
+        else:
+            break
+    feat["consec_up"] = float(consec)
+    feat["vol_expand"] = int(v.iloc[i] > v.iloc[i - 1] > v.iloc[i - 2]) if i >= 2 else 0
+    feat["close_high_pct"] = float((c.iloc[i] - l.iloc[i]) / (h.iloc[i] - l.iloc[i]) * 100) if h.iloc[i] > l.iloc[i] else np.nan
+    feat["gap_up"] = float((df["Open"].iloc[i] - c.iloc[i - 1]) / c.iloc[i - 1] * 100) if i >= 1 else np.nan
+    feat["green_count5"] = float(up_series.iloc[i - 4:i + 1].sum())
+
     row = []
     for name in feat_cols:
         val = feat.get(name, np.nan)
         if name != "mcap_b" and not np.isfinite(val):
-            return None                 # missing price/vol feature -> skip stock
+            return None
         row.append(val)
     return np.array(row, dtype=float), float(c.iloc[i]), float(ret.iloc[i])
 
