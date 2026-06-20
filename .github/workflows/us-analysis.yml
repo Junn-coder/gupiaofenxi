@@ -2,6 +2,8 @@ name: US Stock Analysis
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '45 13 * * 1-5'   # Mon-Fri 13:45 UTC = 9:45 AM ET (EDT, Mar-Nov)
   push:
     paths:
       - 'u/.trigger'
@@ -61,24 +63,53 @@ jobs:
           echo "=== TREND TEMPLATE ===" >> /tmp/us_report.txt
           cd u/utool && python utrend.py AMD LRCX WDC NVDA AVGO VRT LITE GEV ETN GD AAOI SNDK HWM CW >> /tmp/us_report.txt 2>&1 || true
 
-      - name: Write current.md
+      - name: AI analysis → current.md
+        env:
+          _API_KEY: ${{ secrets._API_KEY }}
         run: |
           DATE=$(TZ='America/New_York' date '+%Y-%m-%d (%a)')
+          # Write raw tool output first (fallback if AI fails)
           {
             echo "# US Stock Daily Brief — ${DATE} (美东)"
             echo ""
-            echo "> 买入前看本文件。全量 Trend Template 表 + 逐赛道分析 → uwatchlist.md"
+            echo "> 全量 TT 表 + 逐赛道分析 → uwatchlist.md"
             echo ""
             cat /tmp/us_report.txt
             echo ""
             echo "---"
             echo "REPORT_COMPLETE"
           } > u/current.md
+          # Run AI analysis to rewrite current.md with entry cards + action summary
+          cd u/utool && python build_brief.py --report /tmp/us_report.txt 2>&1 || echo "AI step failed, keeping raw output"
 
       - name: Commit results
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add u/current.md
+          git add u/current.md u/ushare_data/
           git diff --cached --quiet || git commit -m "data: US analysis $(TZ='America/New_York' date '+%Y-%m-%d %H:%M') ET"
           git push
+
+      - name: Send email
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          TO_EMAIL: ${{ secrets.TO_EMAIL }}
+        run: |
+          python -c "
+          import smtplib, os
+          from email.mime.text import MIMEText
+          from email.mime.multipart import MIMEMultipart
+
+          body = open('u/current.md', encoding='utf-8').read()
+          msg = MIMEMultipart()
+          msg['From'] = os.environ['SMTP_USER']
+          msg['To'] = os.environ['TO_EMAIL']
+          msg['Subject'] = f\"US Stock Daily Brief — $(TZ='America/New_York' date '+%Y-%m-%d')\"
+          msg.attach(MIMEText(body, 'plain', 'utf-8'))
+
+          with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
+              s.login(os.environ['SMTP_USER'], os.environ['SMTP_PASSWORD'])
+              s.send_message(msg)
+          print('Email sent.')
+          "
