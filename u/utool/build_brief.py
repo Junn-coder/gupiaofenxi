@@ -1,21 +1,10 @@
 #!/usr/bin/env python3
 """
-Generate formatted current.md via DeepSeek API.
+Generate formatted bought.md via DeepSeek API.
 
 Reads raw tool output + frame.md + uprompt.md + bought.md,
-calls DeepSeek chat API, writes u/current.md in the manual style
-(闸门 + A类入场卡双方向 + 持仓检查 + 行动摘要).
-
-Usage:
-    python build_brief.py                        # uses u/current.md (raw tool output)
-    python build_brief.py --report /tmp/us_report.txt  # explicit input
-    python build_brief.py --dry-run               # print to stdout, don't write
-
-Env:
-    _API_KEY           required
-    Workspace root is inferred as two dirs above this script.
-
-Cost: ~$0.01-0.02 per run (DeepSeek V3 chat).
+calls DeepSeek chat API, writes u/bought.md preserving
+持仓 and 已平仓 sections from the existing file.
 """
 
 import os, sys, json, argparse, subprocess
@@ -37,7 +26,7 @@ def read_file(path):
     return p.read_text(encoding="utf-8")
 
 
-def build_prompt(raw_report, frame, uprompt, bought, uwatchlist):
+def build_prompt(raw_report, frame, uprompt, bought):
     """Assemble the user message with all context."""
     return f"""=== RAW TOOL OUTPUT ===
 {raw_report}
@@ -48,21 +37,18 @@ def build_prompt(raw_report, frame, uprompt, bought, uwatchlist):
 === UPROMPT.MD (output format specification) ===
 {uprompt}
 
-=== BOUGHT.MD (current holdings) ===
+=== BOUGHT.MD (current state) ===
 {bought}
 
-=== UWATCHLIST.MD (watchlist context) ===
-{uwatchlist}
-
 ---
-Generate the final u/current.md per uprompt.md format.
+Generate the daily brief per uprompt.md format.
 IMPORTANT:
-- Write A-class entry cards with both directions (突破买入 / 回踩买入)
-- Include buy-stop prices, stop-loss, position sizing per frame.md risk rules
-- Check holdings against current prices
-- Write actionable summary bullets
-- Use Chinese for all commentary, English for tickers/numbers
-- Keep it terse, decisive, executable
+- Write ONLY 闸门 + A类入场卡 + 行动摘要 sections
+- Do NOT write 当前持仓 or 已平仓 — those are preserved from the existing file
+- A-class entry cards: both directions (突破买入 / 回踩买入)
+- Buy-stop prices, stop-loss, position sizing per frame.md risk rules
+- Chinese for commentary, English for tickers/numbers
+- Terse, decisive, executable
 - Output ONLY the markdown, no preamble."""
 
 
@@ -100,10 +86,30 @@ def call_deepseek(system_prompt, user_message):
         raise RuntimeError(f"API error {e.code}: {body}")
 
 
+def extract_sections(text):
+    """Split text into: top (before ## 当前持仓), holdings (## 当前持仓), closed (## 已平仓)."""
+    import re
+    top = text
+    holdings = ""
+    closed = ""
+
+    m = re.search(r'\n## 当前持仓.*', text, re.DOTALL)
+    if m:
+        top = text[:m.start()]
+        rest = m.group(0)
+        c = re.search(r'\n## 已平仓.*', rest, re.DOTALL)
+        if c:
+            holdings = rest[:c.start()]
+            closed = c.group(0)
+        else:
+            holdings = rest
+    return top, holdings, closed
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--report", default=str(ROOT / "current.md"),
-                    help="Path to raw tool output (default: u/current.md)")
+    ap.add_argument("--report", default=str(ROOT / "bought.md"),
+                    help="Path to raw tool output (default: u/bought.md)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -111,7 +117,9 @@ def main():
     frame = read_file(ROOT / "frame.md")
     uprompt = read_file(ROOT / "uprompt.md")
     bought = read_file(ROOT / "bought.md")
-    uwatchlist = read_file(ROOT / "uwatchlist.md")
+
+    # Preserve 持仓 and 已平仓 from existing bought.md
+    _, holdings, closed = extract_sections(bought)
 
     system_prompt = (
         "You are an expert US stock trading analyst. "
@@ -120,15 +128,21 @@ def main():
         "Output valid markdown only — no explanations before or after."
     )
 
-    user_message = build_prompt(raw_report, frame, uprompt, bought, uwatchlist)
+    user_message = build_prompt(raw_report, frame, uprompt, bought)
     result = call_deepseek(system_prompt, user_message)
 
+    # Merge AI output with preserved sections
+    ai_top, _, _ = extract_sections(result)  # strip any AI-generated sections
+    final = ai_top.rstrip() + "\n\n" + holdings.rstrip()
+    if closed.strip():
+        final += "\n\n" + closed.rstrip()
+
     if args.dry_run:
-        print(result)
+        print(final)
     else:
-        out = ROOT / "current.md"
-        out.write_text(result, encoding="utf-8")
-        print(f"✓ Wrote {out}  ({len(result)} chars)")
+        out = ROOT / "bought.md"
+        out.write_text(final, encoding="utf-8")
+        print(f"✓ Wrote {out}  ({len(final)} chars)")
 
 
 if __name__ == "__main__":
