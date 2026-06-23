@@ -66,22 +66,17 @@ jobs:
       - name: AI analysis → bought.md
         env:
           _API_KEY: ${{ secrets._API_KEY }}
-        run: |
+          run: |
           # Run AI analysis; if it fails, write raw output preserving 持仓/已平仓
           cd u/utool && python build_brief.py --report /tmp/us_report.txt 2>&1 || {
             echo "AI step failed, writing raw output with preserved sections"
             cd "$GITHUB_WORKSPACE"
-            DATE=$(TZ='America/New_York' date '+%Y-%m-%d (%a)')
-            python3 -c "
-import re
-text = open('u/bought.md', encoding='utf-8').read()
-m = re.search(r'\n## 当前持仓.*', text, re.DOTALL)
-preserved = m.group(0) if m else ''
-header = f'# US Stock Daily Brief — ${DATE} (美东)\n\n> 全量 TT 表 + 逐赛道分析 → uwatchlist.md\n\n'
-raw = open('/tmp/us_report.txt').read()
-open('u/bought.md', 'w', encoding='utf-8').write(header + raw + '\n\n' + preserved)
-"
+            export BRIEF_DATE=$(TZ='America/New_York' date '+%Y-%m-%d (%a)')
+            export BOUGHT_PATH=u/bought.md
+            export REPORT_PATH=/tmp/us_report.txt
+            python u/utool/write_fallback.py
           }
+          
       - name: Commit results
         run: |
           git config user.name "github-actions[bot]"
