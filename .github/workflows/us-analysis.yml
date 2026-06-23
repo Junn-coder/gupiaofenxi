@@ -66,7 +66,7 @@ jobs:
       - name: AI analysis → bought.md
         env:
           _API_KEY: ${{ secrets._API_KEY }}
-          run: |
+        run: |
           # Run AI analysis; if it fails, write raw output preserving 持仓/已平仓
           cd u/utool && python build_brief.py --report /tmp/us_report.txt 2>&1 || {
             echo "AI step failed, writing raw output with preserved sections"
