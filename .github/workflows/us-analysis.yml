@@ -86,7 +86,7 @@ open('u/bought.md', 'w', encoding='utf-8').write(header + raw + '\n\n' + preserv
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add u/current.md u/ushare_data/
+          git add u/bought.md u/ushare_data/
           git diff --cached --quiet || git commit -m "data: US analysis $(TZ='America/New_York' date '+%Y-%m-%d %H:%M') ET"
           git push
 
@@ -101,7 +101,7 @@ open('u/bought.md', 'w', encoding='utf-8').write(header + raw + '\n\n' + preserv
           from email.mime.text import MIMEText
           from email.mime.multipart import MIMEMultipart
 
-          body = open('u/current.md', encoding='utf-8').read()
+          body = open('u/bought.md', encoding='utf-8').read()
           msg = MIMEMultipart()
           msg['From'] = os.environ['SMTP_USER']
           msg['To'] = os.environ['TO_EMAIL']
