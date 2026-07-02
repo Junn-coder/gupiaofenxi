@@ -5,11 +5,11 @@ Background (read first, treat as my rules — don't re-derive them):
 Read c/main/hota.md, c/main/framed.md, and c/main/chold.md and follow them in profit-seeking / offensive mode.
 
 Tools (RUN them, don't reason from memory):
-- ctool/index.py            — Layer-1 gate (GREEN/AMBER/RED: RED=空仓, AMBER=退潮2槽)
-- ctool/scan_cn.py --final 3 — converge limit-up pool to 3 candidates (1 per hot sector)
-- ctool/cn_stock.py <code> --history — download/refresh cached price history (needs akshare, one-time)
-- ctool/ca.py <code> --cost <price> — analyze from cached data: MAs, ATR, Stage, swing points, P&L (NO akshare)
-  Workflow: cn_stock.py --history once → ca.py repeatedly. Prefer ca.py for all analysis.
+- c/ctool/cn_stock.py <code> --history — ⚠ MUST run FIRST before any analysis: refresh cached price data
+- c/ctool/index.py — Layer-1 gate (GREEN/AMBER/RED: RED=空仓, AMBER=退潮2槽)
+- c/ctool/scan_cn.py --final 3 — converge limit-up pool to 3 candidates (1 per hot sector)
+- c/ctool/ca.py <code> --cost <price> — analyze: MAs, ATR, Stage, swing points, P&L
+  Workflow: cn_stock.py --history FIRST → then scan/analyze. NEVER use stale cache.
 
 After running tools, write the output to c/main/watchlistd.md in this EXACT format:
 
